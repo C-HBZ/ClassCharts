@@ -1,0 +1,905 @@
+// ╔══════════════════════════════════════════════════════════════════════════╗
+
+// ║           ClassCharts Timetable → Google Calendar Sync                  ║
+
+// ║  Credentials: Extensions > Apps Script > Project Settings >             ║
+
+// ║  Script Properties: CLASSCHARTS_EMAIL  /  CLASSCHARTS_PASSWORD          ║
+
+// ╚══════════════════════════════════════════════════════════════════════════╝
+
+
+
+// ── CONFIGURATION ──────────────────────────────────────────────────────────
+
+
+
+var CONFIG = {
+
+
+
+  // Days ahead to sync (from today)
+
+  SYNC_DAYS: 28,
+
+
+
+  // Pupils and their corresponding Google Calendar names
+
+  PUPILS: [
+
+    { name: "Austin Habberley", calendarName: "Austin_School" },
+
+    { name: "Lewis Habberley",  calendarName: "Lewis_School"  }
+
+  ],
+
+
+
+  // ── Subject → Colour mapping ──────────────────────────────────────────
+
+  SUBJECT_COLOURS: [
+
+
+
+    // ── Languages ──────────────────────────────────────────────────────
+
+    { keywords: ["english"],                                      colour: CalendarApp.EventColor.YELLOW    },
+
+    { keywords: ["welsh"],                                        colour: CalendarApp.EventColor.YELLOW    },
+
+    { keywords: ["german"],                                       colour: CalendarApp.EventColor.YELLOW    },
+
+    { keywords: ["french"],                                       colour: CalendarApp.EventColor.YELLOW    },
+
+
+
+    // ── Mathematics ────────────────────────────────────────────────────
+
+    { keywords: ["maths", "math"],                                colour: CalendarApp.EventColor.BLUE      },
+
+
+
+    // ── Sciences ───────────────────────────────────────────────────────
+
+    { keywords: ["biology"],                                      colour: CalendarApp.EventColor.PALE_BLUE },
+
+    { keywords: ["chemistry"],                                    colour: CalendarApp.EventColor.PALE_BLUE },
+
+    { keywords: ["physics"],                                      colour: CalendarApp.EventColor.PALE_BLUE },
+
+    { keywords: ["science"],                                      colour: CalendarApp.EventColor.PALE_BLUE },
+
+
+
+    // ── Humanities ─────────────────────────────────────────────────────
+
+    { keywords: ["geography"],                                    colour: CalendarApp.EventColor.ORANGE    },
+
+    { keywords: ["history"],                                      colour: CalendarApp.EventColor.ORANGE    },
+
+    { keywords: ["religious", "r.e.", "re "],                     colour: CalendarApp.EventColor.ORANGE    },
+
+
+
+    // ── Creative & Performing Arts ─────────────────────────────────────
+
+    { keywords: ["art"],                                          colour: CalendarApp.EventColor.GREEN     },
+
+    { keywords: ["music"],                                        colour: CalendarApp.EventColor.GREEN     },
+
+    { keywords: ["drama"],                                        colour: CalendarApp.EventColor.GREEN     },
+
+    { keywords: ["textiles"],                                     colour: CalendarApp.EventColor.GREEN     },
+
+
+
+    // ── Technology / Design & Engineering ──────────────────────────────
+
+    { keywords: ["design tech", "des. tech", "design & tech",
+
+                 "design and tech", "dt "],                       colour: CalendarApp.EventColor.GRAY      },
+
+    { keywords: ["computing"],                                    colour: CalendarApp.EventColor.GRAY      },
+
+    { keywords: ["technology"],                                   colour: CalendarApp.EventColor.GRAY      },
+
+
+
+    // ── Physical, Social & Personal Development ────────────────────────
+
+    { keywords: ["p.e.", " pe ", "pe:", "physical education"],    colour: CalendarApp.EventColor.MAUVE     },
+
+    { keywords: ["health"],                                       colour: CalendarApp.EventColor.MAUVE     },
+
+    { keywords: ["wellbeing"],                                    colour: CalendarApp.EventColor.MAUVE     },
+
+    { keywords: ["enrichment"],                                   colour: CalendarApp.EventColor.MAUVE     },
+
+
+
+    // ── Fallback (no match) ─────────────────────────────────────────────
+
+    { keywords: ["__DEFAULT__"],                                  colour: null                             }
+
+  ],
+
+
+
+  // Milliseconds to pause after each calendar write (create or delete).
+
+  // Keeps Google's rate limiter happy on large first-run populations.
+
+  // On subsequent runs where nothing changes this code path is never reached,
+
+  // so there is zero overhead on a no-op sync.
+
+  WRITE_SLEEP_MS: 300
+
+};
+
+
+
+// ── API BASE ────────────────────────────────────────────────────────────────
+
+var PARENT_BASE = "https://www.classcharts.com/apiv2parent";
+
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+
+//  FINGERPRINT HELPER
+
+// ═══════════════════════════════════════════════════════════════════════════
+
+
+
+function lessonFingerprint(lesson) {
+
+  return [
+
+    lesson.start.toISOString(),
+
+    lesson.end.toISOString(),
+
+    (lesson.subject     || "").trim(),
+
+    (lesson.room        || "").trim(),
+
+    (lesson.teacher     || "").trim(),
+
+    (lesson.period_name || "").trim()
+
+  ].join("|");
+
+}
+
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+
+//  ENTRY POINT  –  assign this function to your 1 am daily trigger
+
+// ═══════════════════════════════════════════════════════════════════════════
+
+function syncTimetableToCalendar() {
+
+  var props    = PropertiesService.getScriptProperties();
+
+  var email    = props.getProperty("CLASSCHARTS_EMAIL");
+
+  var password = props.getProperty("CLASSCHARTS_PASSWORD");
+
+
+
+  if (!email || !password) {
+
+    throw new Error(
+
+      "Missing script properties. Add CLASSCHARTS_EMAIL and " +
+
+      "CLASSCHARTS_PASSWORD via: Extensions > Apps Script > " +
+
+      "Project Settings > Script Properties."
+
+    );
+
+  }
+
+
+
+  // Date window
+
+  var windowStart = new Date();
+
+  windowStart.setHours(0, 0, 0, 0);
+
+
+
+  var windowEnd = new Date(windowStart);
+
+  windowEnd.setDate(windowEnd.getDate() + CONFIG.SYNC_DAYS);
+
+
+
+  var fromStr = formatDateYMD(windowStart);
+
+  var toStr   = formatDateYMD(windowEnd);
+
+
+
+  Logger.log("Sync window: " + fromStr + " → " + toStr);
+
+
+
+  var loginResult = loginParent(email, password);
+
+  var session     = loginResult.session;
+
+  var ccPupils    = loginResult.pupils;
+
+
+
+  Logger.log("Logged in. Pupils found in ClassCharts: " +
+
+    ccPupils.map(function(p){ return p.name; }).join(", "));
+
+
+
+  CONFIG.PUPILS.forEach(function (configPupil) {
+
+
+
+    var matched = ccPupils.filter(function (cp) {
+
+      return cp.name.toLowerCase() === configPupil.name.toLowerCase();
+
+    });
+
+
+
+    if (matched.length === 0) {
+
+      Logger.log("WARNING: Could not find ClassCharts pupil matching '" +
+
+        configPupil.name + "' – skipping.");
+
+      return;
+
+    }
+
+
+
+    var studentId = matched[0].student_id;
+
+    Logger.log("Processing: " + configPupil.name +
+
+      " (ID " + studentId + ") → calendar '" + configPupil.calendarName + "'");
+
+
+
+    var calendar = getCalendarByName(configPupil.calendarName);
+
+    if (!calendar) {
+
+      Logger.log("ERROR: Calendar '" + configPupil.calendarName +
+
+        "' not found – skipping " + configPupil.name + ".");
+
+      return;
+
+    }
+
+
+
+    // ── Step 1: Build a map of existing calendar events keyed by fingerprint
+
+    var existingByFP = {};
+
+    calendar.getEvents(windowStart, windowEnd).forEach(function (ev) {
+
+      if (ev.getTag("cc_timetable") !== "true") return;
+
+      existingByFP[ev.getTag("cc_fingerprint")] = ev;
+
+    });
+
+
+
+    Logger.log("Existing tagged events in window: " +
+
+      Object.keys(existingByFP).length);
+
+
+
+    // ── Step 2: Fetch desired timetable from ClassCharts
+
+    var lessons = getTimetable(session, studentId, fromStr, toStr);
+
+    Logger.log("Fetched " + lessons.length + " lesson(s) from ClassCharts for " +
+
+      configPupil.name);
+
+
+
+    // ── Step 3: Build the wanted fingerprint map
+
+    var wantedFPs = {};
+
+    lessons.forEach(function (lesson) {
+
+      wantedFPs[lessonFingerprint(lesson)] = lesson;
+
+    });
+
+
+
+    // ── Step 4: Delete stale events (in calendar but no longer in ClassCharts)
+
+    var deleted = 0;
+
+    Object.keys(existingByFP).forEach(function (fp) {
+
+      if (!wantedFPs[fp]) {
+
+        existingByFP[fp].deleteEvent();
+
+        Utilities.sleep(CONFIG.WRITE_SLEEP_MS);
+
+        deleted++;
+
+        Logger.log("DELETED (stale): " + existingByFP[fp].getTitle() +
+
+          " @ " + fp.split("|")[0]);
+
+      }
+
+    });
+
+
+
+    // ── Step 5: Create missing events (wanted but not yet in calendar)
+
+    var created   = 0;
+
+    var unchanged = 0;
+
+    Object.keys(wantedFPs).forEach(function (fp) {
+
+      if (existingByFP[fp]) {
+
+        unchanged++;
+
+        Logger.log("UNCHANGED: " + wantedFPs[fp].subject +
+
+          " | " + formatDateYMD(wantedFPs[fp].start) +
+
+          " " + formatHHMM(wantedFPs[fp].start) +
+
+          "–" + formatHHMM(wantedFPs[fp].end));
+
+        return;
+
+      }
+
+
+
+      var lesson = wantedFPs[fp];
+
+      var colour = resolveColour(lesson.subject);
+
+
+
+      var event = calendar.createEvent(lesson.subject, lesson.start, lesson.end);
+
+      Utilities.sleep(CONFIG.WRITE_SLEEP_MS);
+
+
+
+      event.setTag("cc_timetable",   "true");
+
+      event.setTag("cc_fingerprint", fp);
+
+
+
+      if (lesson.room) { event.setLocation(lesson.room); }
+
+
+
+      var desc = [
+
+        "Subject:  " + lesson.subject,
+
+        lesson.room        ? "Room:     " + lesson.room        : null,
+
+        lesson.teacher     ? "Teacher:  " + lesson.teacher     : null,
+
+        lesson.period_name ? "Period:   " + lesson.period_name : null
+
+      ].filter(Boolean).join("\n");
+
+      event.setDescription(desc);
+
+
+
+      if (colour) { event.setColor(colour); }
+
+
+
+      Logger.log("CREATED: " + lesson.subject +
+
+        (lesson.room ? " @ " + lesson.room : "") +
+
+        " | " + formatDateYMD(lesson.start) +
+
+        " " + formatHHMM(lesson.start) + "–" + formatHHMM(lesson.end));
+
+      created++;
+
+    });
+
+
+
+    Logger.log(
+
+      "Done for " + configPupil.name + ": " +
+
+      created   + " created, " +
+
+      deleted   + " deleted, " +
+
+      unchanged + " unchanged."
+
+    );
+
+  });
+
+
+
+  Logger.log("Sync complete.");
+
+}
+
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+
+//  DEBUG  –  run this first to inspect raw timetable API output
+
+// ═══════════════════════════════════════════════════════════════════════════
+
+function debugTimetable() {
+
+  var props    = PropertiesService.getScriptProperties();
+
+  var email    = props.getProperty("CLASSCHARTS_EMAIL");
+
+  var password = props.getProperty("CLASSCHARTS_PASSWORD");
+
+
+
+  if (!email || !password) {
+
+    throw new Error(
+
+      "Missing script properties. Add CLASSCHARTS_EMAIL and " +
+
+      "CLASSCHARTS_PASSWORD via: Extensions > Apps Script > " +
+
+      "Project Settings > Script Properties."
+
+    );
+
+  }
+
+
+
+  var loginResult = loginParent(email, password);
+
+  var session     = loginResult.session;
+
+  var ccPupils    = loginResult.pupils;
+
+
+
+  Logger.log("Pupils: " + JSON.stringify(ccPupils));
+
+
+
+  if (ccPupils.length === 0) { Logger.log("No pupils – cannot continue."); return; }
+
+
+
+  var today  = formatDateYMD(new Date());
+
+  var future = formatDateYMD(new Date(
+
+    new Date().getFullYear(),
+
+    new Date().getMonth(),
+
+    new Date().getDate() + 7
+
+  ));
+
+
+
+  ccPupils.forEach(function (pupil) {
+
+    Logger.log("\n── Timetable for " + pupil.name + " ──");
+
+    var url = PARENT_BASE + "/timetable/" + pupil.student_id +
+
+              "?from=" + today + "&to=" + future;
+
+
+
+    var resp = UrlFetchApp.fetch(url, {
+
+      method: "get",
+
+      headers: { Accept: "application/json", Authorization: "Basic " + session },
+
+      muteHttpExceptions: true
+
+    });
+
+    Logger.log("HTTP: " + resp.getResponseCode());
+
+    Logger.log(resp.getContentText().slice(0, 3000));
+
+  });
+
+}
+
+
+
+// ── ClassCharts login ───────────────────────────────────────────────────────
+
+function loginParent(email, password) {
+
+  var response = UrlFetchApp.fetch(PARENT_BASE + "/login", {
+
+    method: "post",
+
+    payload: {
+
+      _method:     "POST",
+
+      email:       email,
+
+      password:    password,
+
+      remember_me: "1"
+
+    },
+
+    headers: { Accept: "application/json" },
+
+    muteHttpExceptions: true,
+
+    followRedirects: true
+
+  });
+
+
+
+  var code = response.getResponseCode();
+
+  if (code !== 200) {
+
+    throw new Error("Login HTTP " + code + ": " +
+
+      response.getContentText().slice(0, 500));
+
+  }
+
+
+
+  var body = JSON.parse(response.getContentText());
+
+  if (body.success !== 1) {
+
+    throw new Error("Login failed: " + JSON.stringify(body));
+
+  }
+
+
+
+  var token = (body.meta || {}).session_id || "";
+
+  if (!token) {
+
+    throw new Error("No session_id in login response: " +
+
+      JSON.stringify(body.meta));
+
+  }
+
+
+
+  var pupilsResp = UrlFetchApp.fetch(PARENT_BASE + "/pupils", {
+
+    method: "get",
+
+    headers: { Accept: "application/json", Authorization: "Basic " + token },
+
+    muteHttpExceptions: true
+
+  });
+
+
+
+  if (pupilsResp.getResponseCode() !== 200) {
+
+    throw new Error("Pupils HTTP " + pupilsResp.getResponseCode() + ": " +
+
+      pupilsResp.getContentText().slice(0, 500));
+
+  }
+
+
+
+  var pupilsBody  = JSON.parse(pupilsResp.getContentText());
+
+  var studentsRaw = pupilsBody.data || [];
+
+
+
+  var pupils = studentsRaw.map(function (s) {
+
+    var first = (s.first_name || "").trim();
+
+    var last  = (s.last_name  || "").trim();
+
+    return {
+
+      name:       [first, last].filter(Boolean).join(" ") || s.name || "Unknown",
+
+      student_id: s.id
+
+    };
+
+  });
+
+
+
+  return { session: token, pupils: pupils };
+
+}
+
+
+
+// ── Fetch timetable ─────────────────────────────────────────────────────────
+
+function getTimetable(session, studentId, fromStr, toStr) {
+
+  var url = PARENT_BASE + "/timetable/" + studentId +
+
+            "?from=" + fromStr + "&to=" + toStr;
+
+
+
+  var response = UrlFetchApp.fetch(url, {
+
+    method: "get",
+
+    headers: { Accept: "application/json", Authorization: "Basic " + session },
+
+    muteHttpExceptions: true,
+
+    followRedirects: true
+
+  });
+
+
+
+  if (response.getResponseCode() !== 200) {
+
+    Logger.log("Timetable fetch failed for student " + studentId +
+
+      ": HTTP " + response.getResponseCode());
+
+    return [];
+
+  }
+
+
+
+  var body = JSON.parse(response.getContentText());
+
+  if (body.success !== 1) {
+
+    Logger.log("Timetable API error for student " + studentId +
+
+      ": " + JSON.stringify(body));
+
+    return [];
+
+  }
+
+
+
+  var lessons = [];
+
+  var raw = body.data || {};
+
+
+
+  if (Array.isArray(raw)) {
+
+    raw.forEach(function (lesson) {
+
+      var parsed = parseLesson(lesson);
+
+      if (parsed) lessons.push(parsed);
+
+    });
+
+  } else {
+
+    Object.keys(raw).forEach(function (dateKey) {
+
+      var dayLessons = raw[dateKey];
+
+      if (!Array.isArray(dayLessons)) return;
+
+      dayLessons.forEach(function (lesson) {
+
+        var parsed = parseLesson(lesson);
+
+        if (parsed) lessons.push(parsed);
+
+      });
+
+    });
+
+  }
+
+
+
+  return lessons;
+
+}
+
+
+
+// ── Parse a single lesson object from the API ───────────────────────────────
+
+function parseLesson(lesson) {
+
+  var startStr = lesson.start_time || lesson.start || lesson.from || null;
+
+  var endStr   = lesson.end_time   || lesson.end   || lesson.to   || null;
+
+  var dateStr  = lesson.date       || lesson.lesson_date           || null;
+
+
+
+  if (!startStr || !endStr) return null;
+
+
+
+  var start, end;
+
+
+
+  if (startStr.indexOf("T") !== -1 || startStr.indexOf(" ") !== -1) {
+
+    start = new Date(startStr);
+
+    end   = new Date(endStr);
+
+  } else if (dateStr) {
+
+    start = new Date(dateStr + "T" + startStr);
+
+    end   = new Date(dateStr + "T" + endStr);
+
+  } else {
+
+    return null;
+
+  }
+
+
+
+  if (isNaN(start.getTime()) || isNaN(end.getTime())) return null;
+
+
+
+  return {
+
+    subject:     lesson.subject_name || lesson.lesson_name || lesson.subject || "Unknown",
+
+    room:        lesson.room_name    || lesson.room        || lesson.location || "",
+
+    teacher:     lesson.teacher_name || lesson.teacher                        || "",
+
+    period_name: lesson.period_name  || lesson.period                         || "",
+
+    start:       start,
+
+    end:         end
+
+  };
+
+}
+
+
+
+// ── Resolve subject colour from CONFIG.SUBJECT_COLOURS ─────────────────────
+
+function resolveColour(subjectName) {
+
+  var lower = (" " + subjectName.toLowerCase() + " ");
+
+
+
+  for (var i = 0; i < CONFIG.SUBJECT_COLOURS.length; i++) {
+
+    var rule = CONFIG.SUBJECT_COLOURS[i];
+
+
+
+    if (rule.keywords[0] === "__DEFAULT__") {
+
+      return rule.colour;
+
+    }
+
+
+
+    for (var j = 0; j < rule.keywords.length; j++) {
+
+      if (lower.indexOf(rule.keywords[j].toLowerCase()) !== -1) {
+
+        return rule.colour;
+
+      }
+
+    }
+
+  }
+
+
+
+  return null;
+
+}
+
+
+
+// ── Find a calendar by its display name ────────────────────────────────────
+
+function getCalendarByName(name) {
+
+  var calendars = CalendarApp.getAllCalendars();
+
+  for (var i = 0; i < calendars.length; i++) {
+
+    if (calendars[i].getName() === name) return calendars[i];
+
+  }
+
+  return null;
+
+}
+
+
+
+// ── Date helpers ────────────────────────────────────────────────────────────
+
+function formatDateYMD(date) {
+
+  return Utilities.formatDate(date, Session.getScriptTimeZone(), "yyyy-MM-dd");
+
+}
+
+
+
+function formatHHMM(date) {
+
+  return Utilities.formatDate(date, Session.getScriptTimeZone(), "HH:mm");
+
+}
