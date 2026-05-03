@@ -1,0 +1,12 @@
+# Environment variables — contains passwords and private keys, never commit
+.env
+
+# Python virtual environment
+venv/
+
+# Sync log output
+sync.log
+
+# Python cache
+__pycache__/
+*.pyc
