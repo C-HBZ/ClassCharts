@@ -463,7 +463,7 @@ def gcal_list_tagged_events(
     time_min: datetime.datetime,
     time_max: datetime.datetime,
 ) -> list[dict]:
-    """Return all events in [time_min, time_max] that have a matching private extended property."""
+    """Return tagged events in [time_min, time_max) (timeMax is exclusive in Google Calendar API)."""
     events = []
     page_token = None
     while True:
@@ -915,7 +915,9 @@ def main() -> None:
     window_end = today + datetime.timedelta(days=SYNC_DAYS)
 
     from_str = today.date().isoformat()
-    to_str   = window_end.date().isoformat()
+    # ClassCharts date ranges are inclusive; Google Calendar timeMax is exclusive.
+    # Use the last in-window date for ClassCharts to keep both windows aligned.
+    to_str   = (window_end - datetime.timedelta(days=1)).date().isoformat()
 
     print(f"\n{'═'*60}")
     print(f"  ClassCharts → Google Calendar Sync")
@@ -969,7 +971,7 @@ def main() -> None:
     # Homework due dates can extend beyond the timetable window, so fetch
     # 60 days ahead rather than the 28-day timetable window.
     hw_end    = today + datetime.timedelta(days=60)
-    hw_to_str = hw_end.date().isoformat()
+    hw_to_str = (hw_end - datetime.timedelta(days=1)).date().isoformat()
     sync_homework(
         cc, cc_pupils_by_name, service, cal_ids["parent"], pupils_config,
         today, hw_end, from_str, hw_to_str, dry_run,
