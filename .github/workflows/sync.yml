@@ -1,0 +1,36 @@
+name: ClassCharts Nightly Sync
+
+on:
+  schedule:
+    # Run at 01:00 UTC every day
+    - cron: '0 1 * * *'
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    name: ClassCharts to Google Calendar Sync
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install google-api-python-client google-auth python-dateutil requests
+
+      - name: Run ClassCharts sync
+        env:
+          CLASSCHARTS_EMAIL: ${{ secrets.CLASSCHARTS_EMAIL }}
+          CLASSCHARTS_PASSWORD: ${{ secrets.CLASSCHARTS_PASSWORD }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          GCAL_ID_PARENT: ${{ secrets.GCAL_ID_PARENT }}
+          GCAL_ID_AUSTIN: ${{ secrets.GCAL_ID_AUSTIN }}
+          GCAL_ID_LEWIS: ${{ secrets.GCAL_ID_LEWIS }}
+        run: python3 classcharts_sync.py
