@@ -114,11 +114,11 @@ jobs:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           GCAL_ID_PARENT: ${{ secrets.GCAL_ID_PARENT }}
           # Add GCAL_ID_<CHILD> for each child:
-          # GCAL_ID_AUSTIN: ${{ secrets.GCAL_ID_AUSTIN }}
-          # GCAL_ID_LEWIS: ${{ secrets.GCAL_ID_LEWIS }}
+          # GCAL_ID_CHILD1: ${{ secrets.GCAL_ID_CHILD1 }}
+          # GCAL_ID_CHILD2: ${{ secrets.GCAL_ID_CHILD2 }}
           # Add optional HOMEWORK_COLOR_<CHILD> for colours:
-          # HOMEWORK_COLOR_AUSTIN: ${{ secrets.HOMEWORK_COLOR_AUSTIN }}
-          # HOMEWORK_COLOR_LEWIS: ${{ secrets.HOMEWORK_COLOR_LEWIS }}
+          # HOMEWORK_COLOR_CHILD1: ${{ secrets.HOMEWORK_COLOR_CHILD1 }}
+          # HOMEWORK_COLOR_CHILD2: ${{ secrets.HOMEWORK_COLOR_CHILD2 }}
         run: python3 classcharts_sync.py
 ```
 
@@ -181,10 +181,10 @@ CLASSCHARTS_EMAIL=your_email@example.com
 CLASSCHARTS_PASSWORD=your_password
 GOOGLE_SERVICE_ACCOUNT_JSON={"type":"service_account",...}
 GCAL_ID_PARENT=your_gmail@gmail.com
-GCAL_ID_AUSTIN=austin_calendar_id@group.calendar.google.com
-GCAL_ID_LEWIS=lewis_calendar_id@group.calendar.google.com
-HOMEWORK_COLOR_AUSTIN=9
-HOMEWORK_COLOR_LEWIS=3
+GCAL_ID_CHILD1=child1_calendar_id@group.calendar.google.com
+GCAL_ID_CHILD2=child2_calendar_id@group.calendar.google.com
+HOMEWORK_COLOR_CHILD1=9
+HOMEWORK_COLOR_CHILD2=3
 EOF
 
 chmod 600 ~/classcharts/.env
