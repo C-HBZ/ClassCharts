@@ -83,15 +83,14 @@ except ImportError:
 SYNC_DAYS = 28          # how many days ahead to sync
 TIMEZONE  = "Europe/London"
 
-# Each pupil: their ClassCharts display name, the calendar to write lessons
-# into, and a short first-name used in composite event titles.
-PUPILS: list[dict] = [
-    {"name": "Austin Habberley", "display": "Austin", "calendar": "Austin_School"},
-    {"name": "Lewis Habberley",  "display": "Lewis",  "calendar": "Lewis_School"},
-]
-
-# The parent's default calendar (for No School, PE/Enrichment, Homework)
-PARENT_CALENDAR_NAME = "Chris Habberley"
+# ────────────────────────────────────────────────────────────────────────────
+# NOTE: Pupils are now auto-discovered from the ClassCharts API at runtime.
+# There is no need to hardcode pupil names in this file.
+#
+# Each pupil's display name is derived from their first name in ClassCharts,
+# and each is automatically matched to their Google Calendar ID (via
+# GCAL_ID_AUSTIN, GCAL_ID_LEWIS, etc., in a case-insensitive mapping).
+# ────────────────────────────────────────────────────────────────────────────
 
 # PE / Enrichment watched keywords (case-insensitive whole-word match)
 WATCHED_SUBJECTS: list[dict] = [
@@ -99,12 +98,15 @@ WATCHED_SUBJECTS: list[dict] = [
     {"keyword": "enrichment", "label": "Enrichment"},
 ]
 
-# Google Calendar colorId for homework events, per pupil display name.
+# Google Calendar colorId for homework events.
 # REST API colorIds: 1=Lavender 2=Sage 3=Grape 4=Flamingo 5=Banana
 #                   6=Tangerine 7=Peacock 8=Graphite 9=Blueberry 10=Basil 11=Tomato
+#
+# Map is by pupil first name (lowercase). If a pupil is not listed here,
+# homework events will not be coloured.
 HOMEWORK_COLOUR: dict[str, str] = {
-    "Austin": "9",   # Blueberry
-    "Lewis":  "3",   # Grape
+    "austin": "9",   # Blueberry
+    "lewis":  "3",   # Grape
 }
 
 # Subject → Google Calendar colorId mapping (mirrors original GAS colour rules)
@@ -364,28 +366,69 @@ def gcal_service():
 
 def gcal_get_calendar_ids() -> dict[str, str]:
     """
-    Return a dict mapping role → calendarId, read from Codespaces secrets.
-    Required env vars: GCAL_ID_PARENT, GCAL_ID_AUSTIN, GCAL_ID_LEWIS
+    Return a dict mapping all available calendar ID keys to their values.
+    This includes 'parent' and all pupil calendars (e.g., 'austin', 'lewis').
+    
+    Reads from Codespaces secrets: GCAL_ID_PARENT, GCAL_ID_AUSTIN, GCAL_ID_LEWIS, etc.
+    Returns whatever is set; only raises if GCAL_ID_PARENT is missing.
     """
-    required = {
-        "parent": "GCAL_ID_PARENT",
-        "austin": "GCAL_ID_AUSTIN",
-        "lewis":  "GCAL_ID_LEWIS",
-    }
     ids: dict[str, str] = {}
-    missing = []
-    for role, env_var in required.items():
-        val = os.environ.get(env_var)
-        if not val:
-            missing.append(env_var)
-        else:
-            ids[role] = val
-    if missing:
+    
+    # Parent calendar is required
+    parent_id = os.environ.get("GCAL_ID_PARENT")
+    if not parent_id:
         raise RuntimeError(
-            f"Missing Codespaces secret(s): {', '.join(missing)}\n"
-            f"Add them via: GitHub repo → Settings → Secrets → Codespaces"
+            f"Missing required Codespaces secret: GCAL_ID_PARENT\n"
+            f"Add it via: GitHub repo → Settings → Secrets → Codespaces"
         )
+    ids["parent"] = parent_id
+    
+    # Pupil calendars: scan for GCAL_ID_<FIRST_NAME> patterns
+    # (e.g., GCAL_ID_AUSTIN, GCAL_ID_LEWIS)
+    for env_var, value in os.environ.items():
+        if env_var.startswith("GCAL_ID_") and env_var != "GCAL_ID_PARENT":
+            first_name = env_var[8:].lower()  # strip "GCAL_ID_" prefix and lowercase
+            if value:
+                ids[first_name] = value
+    
     return ids
+
+
+def build_pupils_config(cc_pupils: list[dict], cal_ids: dict) -> list[dict]:
+    """
+    Build a PUPILS config dynamically from discovered ClassCharts pupils.
+    
+    Maps each pupil to their Google Calendar ID by matching first name
+    against environment variable names (case-insensitive).
+    For example, a pupil with first_name='Austin' looks for GCAL_ID_AUSTIN.
+    
+    Returns a list of pupil configs, filtered to only those with available
+    Google Calendar IDs.
+    """
+    pupils_config = []
+    
+    for pupil in cc_pupils:
+        first_name = pupil.get("first_name", "").strip()
+        if not first_name:
+            continue
+        
+        # Try to find a matching calendar ID by first name
+        cal_key = first_name.lower()
+        cal_id = cal_ids.get(cal_key)
+        
+        if not cal_id:
+            # Calendar ID not configured for this pupil; skip them
+            continue
+        
+        # Build config entry for this pupil
+        # Use first_name as both the display name and the key for homework colours
+        pupils_config.append({
+            "name": pupil.get("name", "Unknown"),  # full name from ClassCharts
+            "first_name": first_name,              # used for calendar lookup and homework colour
+            "calendar_id": cal_id,                 # direct Google Calendar ID (not a name)
+        })
+    
+    return pupils_config
 
 
 def gcal_list_tagged_events(
@@ -491,30 +534,23 @@ def sync_timetable(
     cc: requests.Session,
     cc_pupils_by_name: dict,
     service,
-    cal_ids: dict,
+    pupils_config: list[dict],
     window_start: datetime.datetime,
     window_end: datetime.datetime,
     from_str: str,
     to_str: str,
     dry_run: bool,
 ) -> None:
-    _cal_id_map = {
-        "Austin_School": cal_ids["austin"],
-        "Lewis_School":  cal_ids["lewis"],
-    }
     print("\n── PASS 1: Timetable ─────────────────────────────────────")
-    for config in PUPILS:
+    for config in pupils_config:
         pupil = cc_pupils_by_name.get(config["name"].lower())
         if not pupil:
             print(f"  ⚠  Pupil '{config['name']}' not found in ClassCharts — skipping")
             continue
 
-        cal_id = _cal_id_map.get(config["calendar"])
-        if not cal_id:
-            print(f"  ✗  No calendar ID for '{config['calendar']}' — skipping")
-            continue
+        cal_id = config["calendar_id"]
 
-        print(f"\n  {config['name']} → calendar '{config['calendar']}'")
+        print(f"\n  {config['name']} → timetable sync")
 
         # Step 1 — fetch existing tagged events
         existing = gcal_list_tagged_events(
@@ -580,6 +616,7 @@ def sync_no_school(
     cc_pupils_by_name: dict,
     service,
     parent_cal_id: str,
+    pupils_config: list[dict],
     window_start: datetime.datetime,
     window_end: datetime.datetime,
     from_str: str,
@@ -590,7 +627,7 @@ def sync_no_school(
 
     # Collect all dates that have at least one lesson for any pupil
     school_dates: set[str] = set()
-    for config in PUPILS:
+    for config in pupils_config:
         pupil = cc_pupils_by_name.get(config["name"].lower())
         if not pupil:
             continue
@@ -655,6 +692,7 @@ def sync_pe_enrichment(
     cc_pupils_by_name: dict,
     service,
     parent_cal_id: str,
+    pupils_config: list[dict],
     window_start: datetime.datetime,
     window_end: datetime.datetime,
     from_str: str,
@@ -675,7 +713,7 @@ def sync_pe_enrichment(
 
     # Build the full set of wanted PE/Enrichment events
     wanted: dict[str, dict] = {}  # fingerprint → event body
-    for config in PUPILS:
+    for config in pupils_config:
         pupil = cc_pupils_by_name.get(config["name"].lower())
         if not pupil:
             continue
@@ -686,8 +724,8 @@ def sync_pe_enrichment(
             if not match:
                 continue
 
-            fp    = f"{config['display']}|{_dt_to_rfc3339(lesson['start'])}"
-            title = f"{config['display']}: {match['label']}"
+            fp    = f"{config['first_name']}|{_dt_to_rfc3339(lesson['start'])}"
+            title = f"{config['first_name']}: {match['label']}"
             desc_lines = [
                 f"Pupil:    {config['name']}",
                 f"Subject:  {lesson['subject']}",
@@ -735,6 +773,7 @@ def sync_homework(
     cc_pupils_by_name: dict,
     service,
     parent_cal_id: str,
+    pupils_config: list[dict],
     window_start: datetime.datetime,
     window_end: datetime.datetime,
     from_str: str,
@@ -761,13 +800,13 @@ def sync_homework(
     created = updated = skipped = 0
     tz = ZoneInfo(TIMEZONE)
 
-    for config in PUPILS:
+    for config in pupils_config:
         pupil = cc_pupils_by_name.get(config["name"].lower())
         if not pupil:
             continue
 
         hw_list = cc_get_homework(cc, pupil["id"], from_str, to_str)
-        colour  = HOMEWORK_COLOUR.get(config["display"])
+        colour  = HOMEWORK_COLOUR.get(config["first_name"].lower())
 
         for hw in hw_list:
             hw_id = str(hw["id"])
@@ -781,7 +820,7 @@ def sync_homework(
             end_dt   = datetime.datetime(due.year, due.month, due.day, 10, 0, 0, tzinfo=tz)
 
             # Sanitise title: prevent injection of special characters into calendar
-            raw_title  = f"{config['display']}: {hw['subject']}: {hw['title']}"
+            raw_title  = f"{config['first_name']}: {hw['subject']}: {hw['title']}"
             safe_title = " ".join(raw_title.split())
 
             desc = (
@@ -873,28 +912,30 @@ def main() -> None:
         print(f"✗  {exc}")
         sys.exit(1)
 
-    # Map pupil calendar IDs into the PUPILS config for pass 1
-    _cal_id_map = {
-        "Austin_School": cal_ids["austin"],
-        "Lewis_School":  cal_ids["lewis"],
-    }
-    print(f"Calendars: parent={cal_ids['parent'][:30]}… | austin OK | lewis OK")
+    # Build pupils config dynamically from discovered pupils + available calendar IDs
+    pupils_config = build_pupils_config(cc_pupils, cal_ids)
+    if not pupils_config:
+        print("✗  No pupils found with available Google Calendars — check GCAL_ID_* secrets")
+        sys.exit(1)
+
+    pupil_names = [p["name"] for p in pupils_config]
+    print(f"Calendars: parent={cal_ids['parent'][:30]}… | {len(pupils_config)} pupil(s) with calendars")
 
     # ── Four sync passes ─────────────────────────────────────────────────
     sync_timetable(
-        cc, cc_pupils_by_name, service, cal_ids,
+        cc, cc_pupils_by_name, service, pupils_config,
         today, window_end, from_str, to_str, dry_run,
     )
 
     # Pass 2–4 share the same cc session; timetable re-fetches are needed
     # inside each pass so results aren't cross-contaminated.
     sync_no_school(
-        cc, cc_pupils_by_name, service, cal_ids["parent"],
+        cc, cc_pupils_by_name, service, cal_ids["parent"], pupils_config,
         today, window_end, from_str, to_str, dry_run,
     )
 
     sync_pe_enrichment(
-        cc, cc_pupils_by_name, service, cal_ids["parent"],
+        cc, cc_pupils_by_name, service, cal_ids["parent"], pupils_config,
         today, window_end, from_str, to_str, dry_run,
     )
 
@@ -903,7 +944,7 @@ def main() -> None:
     hw_end    = today + datetime.timedelta(days=60)
     hw_to_str = hw_end.date().isoformat()
     sync_homework(
-        cc, cc_pupils_by_name, service, cal_ids["parent"],
+        cc, cc_pupils_by_name, service, cal_ids["parent"], pupils_config,
         today, hw_end, from_str, hw_to_str, dry_run,
     )
 
