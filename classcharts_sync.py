@@ -42,7 +42,7 @@ Google Calendar (service-account):
 
 Optional homework colour mapping:
   HOMEWORK_COLOR_<FIRSTNAME>    Google Calendar colorId for homework by pupil
-                                (e.g. HOMEWORK_COLOR_AUSTIN=9 for Blueberry)
+                                                                (e.g. HOMEWORK_COLOR_STUDENT1=9 for Blueberry)
                                 Use pupil's first name (case-insensitive)
 
 Usage
@@ -93,7 +93,7 @@ TIMEZONE  = "Europe/London"
 #
 # Each pupil's display name is derived from their first name in ClassCharts,
 # and each is automatically matched to their Google Calendar ID (via
-# GCAL_ID_AUSTIN, GCAL_ID_LEWIS, etc., in a case-insensitive mapping).
+# GCAL_ID_<FIRSTNAME> variables in a case-insensitive mapping).
 # ────────────────────────────────────────────────────────────────────────────
 
 # PE / Enrichment watched keywords (case-insensitive whole-word match)
@@ -107,7 +107,7 @@ WATCHED_SUBJECTS: list[dict] = [
 #                   6=Tangerine 7=Peacock 8=Graphite 9=Blueberry 10=Basil 11=Tomato
 #
 # Populated at runtime from environment variables:
-#   HOMEWORK_COLOR_<FIRSTNAME>=colorId  (e.g. HOMEWORK_COLOR_AUSTIN=9)
+#   HOMEWORK_COLOR_<FIRSTNAME>=colorId  (e.g. HOMEWORK_COLOR_STUDENT1=9)
 #
 # If a pupil is not configured, their homework events will not be coloured.
 HOMEWORK_COLOUR: dict[str, str] = {}
@@ -160,7 +160,7 @@ def load_homework_colours() -> None:
     """
     Populate HOMEWORK_COLOUR from environment variables.
     Expected format: HOMEWORK_COLOR_<FIRSTNAME>=<colorId>
-    Example: HOMEWORK_COLOR_AUSTIN=9, HOMEWORK_COLOR_LEWIS=3
+    Example: HOMEWORK_COLOR_STUDENT1=9, HOMEWORK_COLOR_STUDENT2=3
     """
     global HOMEWORK_COLOUR
     for key, value in os.environ.items():
@@ -391,9 +391,9 @@ def gcal_service():
 def gcal_get_calendar_ids() -> dict[str, str]:
     """
     Return a dict mapping all available calendar ID keys to their values.
-    This includes 'parent' and all pupil calendars (e.g., 'austin', 'lewis').
+    This includes 'parent' and all pupil calendars (e.g., 'student1', 'student2').
     
-    Reads from Codespaces secrets: GCAL_ID_PARENT, GCAL_ID_AUSTIN, GCAL_ID_LEWIS, etc.
+    Reads from Codespaces secrets: GCAL_ID_PARENT, GCAL_ID_<FIRSTNAME>, etc.
     Returns whatever is set; only raises if GCAL_ID_PARENT is missing.
     """
     ids: dict[str, str] = {}
@@ -408,7 +408,7 @@ def gcal_get_calendar_ids() -> dict[str, str]:
     ids["parent"] = parent_id
     
     # Pupil calendars: scan for GCAL_ID_<FIRST_NAME> patterns
-    # (e.g., GCAL_ID_AUSTIN, GCAL_ID_LEWIS)
+    # (e.g., GCAL_ID_STUDENT1, GCAL_ID_STUDENT2)
     for env_var, value in os.environ.items():
         if env_var.startswith("GCAL_ID_") and env_var != "GCAL_ID_PARENT":
             first_name = env_var[8:].lower()  # strip "GCAL_ID_" prefix and lowercase
@@ -424,7 +424,7 @@ def build_pupils_config(cc_pupils: list[dict], cal_ids: dict) -> list[dict]:
     
     Maps each pupil to their Google Calendar ID by matching first name
     against environment variable names (case-insensitive).
-    For example, a pupil with first_name='Austin' looks for GCAL_ID_AUSTIN.
+    For example, a pupil with first_name='Student1' looks for GCAL_ID_STUDENT1.
     
     Returns a list of pupil configs, filtered to only those with available
     Google Calendar IDs.
@@ -551,7 +551,7 @@ def lesson_fingerprint(lesson: dict) -> str:
 
 
 # ════════════════════════════════════════════════════════════════════════════
-#  Sync pass 1 — Timetable → Austin_School / Lewis_School
+#  Sync pass 1 — Timetable → per-pupil calendars
 # ════════════════════════════════════════════════════════════════════════════
 
 def sync_timetable(
