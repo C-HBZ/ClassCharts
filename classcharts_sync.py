@@ -5,7 +5,8 @@ classcharts_sync.py  —  ClassCharts → Google Calendar Sync
 Runs four sync passes in sequence each time it is invoked:
 
   1. TIMETABLE   Fingerprint-based sync of each pupil's lessons into their
-                 own named Google Calendar (Austin_School / Lewis_School).
+                 own named Google Calendar (matched by first name via
+                 GCAL_ID_<FIRSTNAME> environment variables).
                  Subject → colour mapping mirrors the original GAS script.
                  Stale events (no longer in ClassCharts) are deleted; new
                  ones are created; unchanged ones are left alone.
@@ -22,9 +23,9 @@ Runs four sync passes in sequence each time it is invoked:
 
   4. HOMEWORK    Creates a 09:00–10:00 event on the due date for each
                  outstanding homework item, in the parent's default calendar.
-                 Austin events are coloured Blueberry; Lewis events Grape.
-                 Already-synced items (identified by extended-property tag)
-                 are never duplicated.
+                 Event colours are determined by the HOMEWORK_COLOUR mapping
+                 (by child's first name). Already-synced items (identified by
+                 extended-property tag) are never duplicated.
 
 Authentication
 --------------
@@ -36,10 +37,13 @@ Google Calendar (service-account):
   GOOGLE_SERVICE_ACCOUNT_JSON   full contents of the key JSON file
                                 (Codespaces secret)
 
-  The service account must be granted "Make changes to events" on:
-    • Austin_School
-    • Lewis_School
-    • the parent's primary/default calendar
+  The service account must be granted "Make changes to events" on all
+  calendars specified in GCAL_ID_* environment variables.
+
+Optional homework colour mapping:
+  HOMEWORK_COLOR_<FIRSTNAME>    Google Calendar colorId for homework by pupil
+                                (e.g. HOMEWORK_COLOR_AUSTIN=9 for Blueberry)
+                                Use pupil's first name (case-insensitive)
 
 Usage
 -----
@@ -102,12 +106,11 @@ WATCHED_SUBJECTS: list[dict] = [
 # REST API colorIds: 1=Lavender 2=Sage 3=Grape 4=Flamingo 5=Banana
 #                   6=Tangerine 7=Peacock 8=Graphite 9=Blueberry 10=Basil 11=Tomato
 #
-# Map is by pupil first name (lowercase). If a pupil is not listed here,
-# homework events will not be coloured.
-HOMEWORK_COLOUR: dict[str, str] = {
-    "austin": "9",   # Blueberry
-    "lewis":  "3",   # Grape
-}
+# Populated at runtime from environment variables:
+#   HOMEWORK_COLOR_<FIRSTNAME>=colorId  (e.g. HOMEWORK_COLOR_AUSTIN=9)
+#
+# If a pupil is not configured, their homework events will not be coloured.
+HOMEWORK_COLOUR: dict[str, str] = {}
 
 # Subject → Google Calendar colorId mapping (mirrors original GAS colour rules)
 # Match is case-insensitive substring on the subject name.
@@ -148,6 +151,27 @@ TAG_HOMEWORK    = "cc_homework"         # value "true" on homework events
 TAG_HW_ID       = "cc_hw_id"           # ClassCharts homework id for dedup
 TAG_HW_HASH     = "cc_hw_hash"         # content hash — detects title/date/subject changes
 TAG_PE_FP       = "cc_pe_fp"           # fingerprint on PE/Enrichment events
+
+# ════════════════════════════════════════════════════════════════════════════
+#  Utility: Load homework colours from environment
+# ════════════════════════════════════════════════════════════════════════════
+
+def load_homework_colours() -> None:
+    """
+    Populate HOMEWORK_COLOUR from environment variables.
+    Expected format: HOMEWORK_COLOR_<FIRSTNAME>=<colorId>
+    Example: HOMEWORK_COLOR_AUSTIN=9, HOMEWORK_COLOR_LEWIS=3
+    """
+    global HOMEWORK_COLOUR
+    for key, value in os.environ.items():
+        if key.startswith("HOMEWORK_COLOR_"):
+            firstname = key[len("HOMEWORK_COLOR_"):].lower()
+            try:
+                colour_id = str(int(value))  # validate it's numeric
+                HOMEWORK_COLOUR[firstname] = colour_id
+            except ValueError:
+                print(f"  ⚠  Skipping {key}: value '{value}' is not a valid colorId")
+
 
 # ════════════════════════════════════════════════════════════════════════════
 #  ClassCharts helpers
@@ -882,6 +906,9 @@ def main() -> None:
     )
     args = parser.parse_args()
     dry_run: bool = args.dry_run
+
+    # Load homework colours from environment variables
+    load_homework_colours()
 
     tz = ZoneInfo(TIMEZONE)
     today = datetime.datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)

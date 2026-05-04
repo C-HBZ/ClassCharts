@@ -9,10 +9,10 @@ Tries two independent methods to fetch timetable data:
 Credentials are read from environment variables (Codespaces Secrets):
   CLASSCHARTS_EMAIL      Parent account e-mail
   CLASSCHARTS_PASSWORD   Parent account password
-  AUSTIN_DOB             Austin's date of birth  (DD/MM/YYYY or YYYY-MM-DD)
-  AUSTIN_CODE            Austin's student access code
-  LEWIS_DOB              Lewis's date of birth   (DD/MM/YYYY or YYYY-MM-DD)
-  LEWIS_CODE             Lewis's student access code
+  CHILD1_DOB             First child's date of birth  (DD/MM/YYYY or YYYY-MM-DD)
+  CHILD1_CODE            First child's student access code
+  CHILD2_DOB             Second child's date of birth  (DD/MM/YYYY or YYYY-MM-DD)
+  CHILD2_CODE            Second child's student access code
 
 Authentication change (late April 2026)
 ---------------------------------------

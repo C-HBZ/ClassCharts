@@ -25,12 +25,15 @@ var CONFIG = {
 
 
   // Pupils and their corresponding Google Calendar names
+  // NOTE: In the Python version (classcharts_sync.py), pupils are auto-discovered
+  // from ClassCharts. In the original GAS version, specify each child's full name
+  // and calendar name below:
 
   PUPILS: [
 
-    { name: "Austin Habberley", calendarName: "Austin_School" },
+    { name: "Child 1 FirstName", calendarName: "Child1_School" },
 
-    { name: "Lewis Habberley",  calendarName: "Lewis_School"  }
+    { name: "Child 2 FirstName",  calendarName: "Child2_School"  }
 
   ],
 
