@@ -30,7 +30,11 @@ jobs:
           CLASSCHARTS_EMAIL: ${{ secrets.CLASSCHARTS_EMAIL }}
           CLASSCHARTS_PASSWORD: ${{ secrets.CLASSCHARTS_PASSWORD }}
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          # Parent calendar — required
           GCAL_ID_PARENT: ${{ secrets.GCAL_ID_PARENT }}
+          # Pupil calendars — add as needed for each child (GCAL_ID_<FIRSTNAME>)
           GCAL_ID_AUSTIN: ${{ secrets.GCAL_ID_AUSTIN }}
           GCAL_ID_LEWIS: ${{ secrets.GCAL_ID_LEWIS }}
+          # Additional children: uncomment or add GCAL_ID_<FIRSTNAME> when needed
+          # GCAL_ID_EMMA: ${{ secrets.GCAL_ID_EMMA }}
         run: python3 classcharts_sync.py

@@ -19,6 +19,12 @@ Changes in ClassCharts (amended due dates, room changes, cancelled lessons) are 
 
 ---
 
+## Privacy
+
+This repo contains no hardcoded family names, child names, or personal identifiers. All configuration is stored in environment variables (`.env` file or Codespaces secrets). The source code is safe to make public — just keep your `.env` file private.
+
+---
+
 ## Prerequisites
 
 - A ClassCharts parent account
@@ -32,12 +38,12 @@ Changes in ClassCharts (amended due dates, room changes, cancelled lessons) are 
 
 ### 1 — Copy the files
 
-Create a dedicated directory and copy the two project files into it:
+Create a dedicated directory and copy the project files into it:
 
 ```bash
 mkdir -p ~/classcharts
 cp classcharts_sync.py ~/classcharts/
-cp .env             ~/classcharts/
+cp .env.template      ~/classcharts/.env
 ```
 
 Recommended location: `/home/pi/classcharts/` or `~/classcharts/`
@@ -79,25 +85,46 @@ pip install requests google-api-python-client google-auth python-dotenv
 
 ---
 
-### 5 — Fill in the .env file
+### 5 — Fill in the environment variables
 
-Edit `~/classcharts/.env` and replace every placeholder with your real values.  
-The file contains comments explaining each variable. At minimum you need:
+The script reads configuration from environment variables. You can set these in a `.env` file (which the script loads automatically) or as Codespaces secrets.
 
-| Variable | What it is |
-|---|---|
-| `CLASSCHARTS_EMAIL` | Your ClassCharts parent login email |
-| `CLASSCHARTS_PASSWORD` | Your ClassCharts parent login password |
-| `GOOGLE_SERVICE_ACCOUNT_JSON` | Full JSON contents of your service account key (see below) |
-| `GCAL_ID_PARENT` | Your personal Google Calendar ID (usually your Gmail address) |
-| `GCAL_ID_AUSTIN` | Calendar ID for the first child's school calendar |
-| `GCAL_ID_LEWIS` | Calendar ID for the second child's school calendar |
+**Required variables:**
 
-**Keep this file private.** It contains passwords and a private key:
+| Variable | What it is | Example |
+|---|---|---|
+| `CLASSCHARTS_EMAIL` | Your ClassCharts parent login email | `parent@example.com` |
+| `CLASSCHARTS_PASSWORD` | Your ClassCharts parent login password | (your password) |
+| `GOOGLE_SERVICE_ACCOUNT_JSON` | Full JSON contents of your service account key | (see Google Setup below) |
+| `GCAL_ID_PARENT` | Your personal Google Calendar ID (usually your Gmail address) | `parent@gmail.com` |
+
+**For each child's timetable calendar**, add a variable named `GCAL_ID_<FIRSTNAME>` matching their first name in ClassCharts:
+
+| Child's first name | Environment variable | Calendar ID |
+|---|---|---|
+| Austin | `GCAL_ID_AUSTIN` | (their school calendar ID) |
+| Lewis | `GCAL_ID_LEWIS` | (their school calendar ID) |
+| Emma | `GCAL_ID_EMMA` | (their school calendar ID) |
+| (etc.) | `GCAL_ID_<FIRSTNAME>` | (etc.) |
+
+The script automatically discovers all pupils in your ClassCharts account and syncs each one into their corresponding calendar (matched by first name, case-insensitive).
+
+**If using `.env` file on a Raspberry Pi**, create one:
 
 ```bash
+cat > ~/classcharts/.env << 'EOF'
+CLASSCHARTS_EMAIL=parent@example.com
+CLASSCHARTS_PASSWORD=your_password
+GOOGLE_SERVICE_ACCOUNT_JSON={"type":"service_account",...}
+GCAL_ID_PARENT=parent@gmail.com
+GCAL_ID_AUSTIN=gcal_id_here
+GCAL_ID_LEWIS=gcal_id_here
+EOF
+
 chmod 600 ~/classcharts/.env
 ```
+
+**If using Codespaces secrets**, go to **Settings → Secrets and Variables → Codespaces** and add each variable there instead.
 
 ---
 
@@ -171,27 +198,30 @@ tail -50 ~/classcharts/sync.log
 
 ---
 
-## Children and calendars configuration
-
-The children's names, display names, and which calendar to write their timetable into are set near the top of `classcharts_sync.py` in the `PUPILS` list. If you have a different number of children or different names, edit that section:
-
-```python
-PUPILS: list[dict] = [
-    {"name": "Full Name As In ClassCharts", "display": "FirstName", "calendar": "CalendarKey"},
-]
-```
-
-The `calendar` value maps to the corresponding `GCAL_ID_*` variable name in your `.env`.
-
----
-
 ## Troubleshooting
 
 | Symptom | Likely cause |
 |---|---|
 | `ERROR: pip install requests` | Packages not installed — run step 4 again |
-| `Missing Codespaces secret(s)` | `.env` file missing or a variable is blank |
-| `401 Unauthorized` on Google Calendar | Service account not shared with the calendar — redo the sharing step |
+| `Missing required Codespaces secret: GCAL_ID_PARENT` | `GCAL_ID_PARENT` is not set — add it to `.env` or Codespaces secrets |
+| `No pupils found with available Google Calendars` | No `GCAL_ID_<FIRSTNAME>` variables found for discovered pupils — add them for each child |
+| `401 Unauthorized` on Google Calendar | Service account not shared with one of the calendars — redo the sharing step for all three (parent + child calendars) |
 | `403 Forbidden` on ClassCharts | Password changed or account locked — check ClassCharts login in a browser |
 | Events duplicating | Old GAS-created events have no fingerprint tag; they are invisible to this script. Delete them manually once, then this script manages everything going forward |
 | No lessons returned | ClassCharts may be unavailable or the school hasn't published the timetable for that week yet |
+
+---
+
+## How pupils are discovered
+
+The script automatically fetches all pupils from your ClassCharts account at runtime. For each pupil, it:
+
+1. Reads their full name and first name from ClassCharts
+2. Looks for an environment variable named `GCAL_ID_<FIRSTNAME>` (case-insensitive match on first name)
+3. If found, syncs that pupil's timetable into the corresponding Google Calendar
+4. If not found, skips that pupil (no error, just skipped)
+
+**This means:**
+- Adding a new child to ClassCharts will automatically sync them on the next run (as long as you've added the `GCAL_ID_<FIRSTNAME>` variable)
+- Removing a child from ClassCharts will stop syncing them (but won't delete their events)
+- The script source code contains no hardcoded names — it's safe to make the repo public
