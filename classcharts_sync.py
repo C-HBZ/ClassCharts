@@ -752,10 +752,14 @@ _PREP_TAIL_RE = re.compile(r"\s+\b(for|about|on|of)\b\s+.*$", re.IGNORECASE)
 
 
 def _abbreviate_subject(subject: str) -> str:
-    """Return a short subject label: a configured abbreviation or the first 6 characters."""
+    """Return a short subject label: a configured abbreviation or the first 6 characters.
+
+    Matching is substring-based (case-insensitive) so e.g. 'Textiles & Food Technology'
+    matches a configured key of 'textiles & food'.
+    """
     key = subject.strip().lower()
     for full, abbrev in SUBJECT_ABBREVIATIONS.items():
-        if key == full:
+        if full.lower() in key:
             return abbrev
     return subject[:6]
 
@@ -962,16 +966,18 @@ def sync_homework(
                 if end_dt.tzinfo is None:
                     end_dt = end_dt.replace(tzinfo=tz)
                 # Include lesson start in hash so a rescheduled lesson triggers a calendar update
-                hw_hash = f"{hw_id}|{hw['due_date']}|{hw['title']}|{hw['subject']}|lesson:{_dt_to_rfc3339(start_dt)}"
+                subj_label = _abbreviate_subject(hw["subject"])
+                hw_label   = _extract_homework_label(hw["title"])
+                safe_title = f"{config['first_name']}: {subj_label}: {hw_label}"
+                hw_hash    = f"{hw_id}|{hw['due_date']}|{safe_title}|lesson:{_dt_to_rfc3339(start_dt)}"
             else:
-                due      = datetime.date.fromisoformat(hw["due_date"])
-                start_dt = datetime.datetime(due.year, due.month, due.day, 9,  0, 0, tzinfo=tz)
-                end_dt   = datetime.datetime(due.year, due.month, due.day, 10, 0, 0, tzinfo=tz)
-                hw_hash  = f"{hw_id}|{hw['due_date']}|{hw['title']}|{hw['subject']}"
-
-            subj_label = _abbreviate_subject(hw["subject"])
-            hw_label   = _extract_homework_label(hw["title"])
-            safe_title = f"{config['first_name']}: {subj_label}: {hw_label}"
+                due        = datetime.date.fromisoformat(hw["due_date"])
+                start_dt   = datetime.datetime(due.year, due.month, due.day, 9,  0, 0, tzinfo=tz)
+                end_dt     = datetime.datetime(due.year, due.month, due.day, 10, 0, 0, tzinfo=tz)
+                subj_label = _abbreviate_subject(hw["subject"])
+                hw_label   = _extract_homework_label(hw["title"])
+                safe_title = f"{config['first_name']}: {subj_label}: {hw_label}"
+                hw_hash    = f"{hw_id}|{hw['due_date']}|{safe_title}"
 
             desc = (
                 f"Pupil:   {config['name']}\n"
