@@ -852,16 +852,16 @@ def sync_homework(
 ) -> None:
     print("\n── PASS 4: Homework ──────────────────────────────────────")
 
-    # Fetch all existing homework events; build lookup by cc_hw_id → (event_id, stored_hash)
+    # Fetch all existing homework events; build lookup by cc_hw_id → (event_id, stored_hash, ev_start)
     existing = gcal_list_tagged_events(
         service, parent_cal_id, TAG_HOMEWORK, "true", window_start, window_end
     )
-    existing_by_hw_id: dict[str, tuple[str, str]] = {}
+    existing_by_hw_id: dict[str, tuple[str, str, dict]] = {}
     for ev in existing:
         priv  = (ev.get("extendedProperties") or {}).get("private", {})
         hw_id = priv.get(TAG_HW_ID)
         if hw_id:
-            existing_by_hw_id[hw_id] = (ev["id"], priv.get(TAG_HW_HASH, ""))
+            existing_by_hw_id[hw_id] = (ev["id"], priv.get(TAG_HW_HASH, ""), ev.get("start", {}))
     print(f"  Existing homework events in window: {len(existing_by_hw_id)}")
 
     # Track every CC homework ID seen this run (for orphan cleanup at the end)
@@ -944,7 +944,7 @@ def sync_homework(
                 body["colorId"] = colour
 
             if hw_id in existing_by_hw_id:
-                ev_id, stored_hash = existing_by_hw_id[hw_id]
+                ev_id, stored_hash, _ = existing_by_hw_id[hw_id]
                 if stored_hash == hw_hash:
                     skipped += 1
                     continue
@@ -956,10 +956,20 @@ def sync_homework(
                 gcal_create_event(service, parent_cal_id, body, dry_run)
                 created += 1
 
-    # Remove orphaned events for homework cancelled/deleted in ClassCharts
+    # Remove orphaned events for homework cancelled/deleted in ClassCharts.
+    # Past events (start date before today) are kept even if ClassCharts no longer
+    # returns them — they may have been completed/expired on the ClassCharts side.
+    today_date = datetime.datetime.now(ZoneInfo(TIMEZONE)).date()
     removed = 0
-    for hw_id, (ev_id, _) in existing_by_hw_id.items():
+    for hw_id, (ev_id, _, ev_start) in existing_by_hw_id.items():
         if hw_id not in cc_hw_ids_seen:
+            start_str = ev_start.get("dateTime") or ev_start.get("date", "")
+            try:
+                ev_date = datetime.datetime.fromisoformat(start_str).date()
+            except (ValueError, TypeError):
+                ev_date = None
+            if ev_date is not None and ev_date < today_date:
+                continue  # leave past homework events in place
             gcal_delete_event(service, parent_cal_id, ev_id, dry_run)
             removed += 1
     if removed:
