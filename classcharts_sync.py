@@ -96,8 +96,10 @@ TIMEZONE  = "Europe/London"
 # GCAL_ID_<FIRSTNAME> variables in a case-insensitive mapping).
 # ────────────────────────────────────────────────────────────────────────────
 
-# PE / Enrichment watched keywords (case-insensitive whole-word match)
-WATCHED_SUBJECTS: list[dict] = [
+# Subjects watched in the parent's default calendar — controls which lessons get a timed
+# reminder (Pass 3) and which homework events are snapped to lesson time and suppress the
+# duplicate timetable alert instead (Pass 4). Add/remove entries to expand the watchlist.
+PARENT_WATCHED_SUBJECTS: list[dict] = [
     {"keyword": "pe",         "label": "PE"},
     {"keyword": "enrichment", "label": "Enrichment"},
 ]
@@ -253,7 +255,7 @@ def cc_get_timetable(
     student_id: int,
     from_date: str,
     to_date: str,
-) -> list[dict]:
+) -> list[dict] | None:
     """
     Fetch and parse a pupil's timetable.
     Returns a list of lesson dicts:
@@ -266,12 +268,12 @@ def cc_get_timetable(
     )
     if resp.status_code != 200:
         print(f"  ⚠  timetable HTTP {resp.status_code} for student {student_id}")
-        return []
+        return None
 
     body = resp.json()
     if body.get("success") != 1:
         print(f"  ⚠  timetable API error for student {student_id}: {body}")
-        return []
+        return None
 
     raw = body.get("data", [])
     lessons: list[dict] = []
@@ -292,7 +294,7 @@ def cc_get_homework(
     student_id: int,
     from_date: str,
     to_date: str,
-) -> list[dict]:
+) -> list[dict] | None:
     """
     Fetch outstanding homework items due in [from_date, to_date].
     Returns list of {id, subject, title, due_date (str YYYY-MM-DD)}.
@@ -305,14 +307,13 @@ def cc_get_homework(
     )
     if resp.status_code != 200:
         print(f"  ⚠  homework HTTP {resp.status_code} for student {student_id}")
-        return []
+        return None
 
     body = resp.json()
     if body.get("success") != 1:
         print(f"  ⚠  homework API error for student {student_id}: {body}")
-        return []
+        return None
 
-    today = datetime.date.today()
     hw_list = []
     for hw in body.get("data", []):
         due_raw = hw.get("due_date") or hw.get("due") or hw.get("deadline")
@@ -322,8 +323,6 @@ def cc_get_homework(
         try:
             due = datetime.date.fromisoformat(due_str)
         except ValueError:
-            continue
-        if due < today:
             continue
         # subject can be None if the school didn't attach a lesson
         subject = hw.get("subject") or hw.get("lesson") or "Form"
@@ -453,6 +452,24 @@ def build_pupils_config(cc_pupils: list[dict], cal_ids: dict) -> list[dict]:
         })
     
     return pupils_config
+
+
+def build_all_pupils_for_parent(cc_pupils: list[dict]) -> list[dict]:
+    """
+    Build a config list for ALL discovered ClassCharts pupils.
+    Used for parent-calendar passes (No School, PE/Enrichment, Homework)
+    where a per-pupil Google Calendar ID is not required.
+    """
+    result = []
+    for pupil in cc_pupils:
+        first_name = pupil.get("first_name", "").strip()
+        if not first_name:
+            continue
+        result.append({
+            "name":       pupil.get("name", "Unknown"),
+            "first_name": first_name,
+        })
+    return result
 
 
 def gcal_list_tagged_events(
@@ -589,6 +606,9 @@ def sync_timetable(
 
         # Step 2 — fetch desired timetable from ClassCharts
         lessons = cc_get_timetable(cc, pupil["id"], from_str, to_str)
+        if lessons is None:
+            print(f"    ⚠  Timetable fetch failed — skipping sync for {config['name']}")
+            continue
         print(f"    ClassCharts lessons:    {len(lessons)}")
 
         wanted: dict[str, dict] = {lesson_fingerprint(l): l for l in lessons}
@@ -656,6 +676,9 @@ def sync_no_school(
         if not pupil:
             continue
         lessons = cc_get_timetable(cc, pupil["id"], from_str, to_str)
+        if lessons is None:
+            print(f"  ⚠  Timetable fetch failed for {config['name']} — aborting No School pass")
+            return
         for l in lessons:
             school_dates.add(l["date"])
 
@@ -673,7 +696,8 @@ def sync_no_school(
     # Create new No School markers for weekdays with no lessons
     created = 0
     start_date = window_start.date()
-    for i in range(SYNC_DAYS):
+    total_days = (window_end - window_start).days
+    for i in range(total_days):
         day = start_date + datetime.timedelta(days=i)
         if day.weekday() >= 5:          # skip Sat/Sun
             continue
@@ -702,9 +726,9 @@ def sync_no_school(
 # ════════════════════════════════════════════════════════════════════════════
 
 def _subject_matches_watched(subject: str) -> dict | None:
-    """Return the matching WATCHED_SUBJECTS entry, or None."""
+    """Return the matching PARENT_WATCHED_SUBJECTS entry, or None."""
     padded = f" {subject.lower()} "
-    for watch in WATCHED_SUBJECTS:
+    for watch in PARENT_WATCHED_SUBJECTS:
         kw = watch["keyword"].lower()
         if padded.strip() == kw or f" {kw} " in padded:
             return watch
@@ -743,9 +767,31 @@ def sync_pe_enrichment(
             continue
 
         lessons = cc_get_timetable(cc, pupil["id"], from_str, to_str)
+        if lessons is None:
+            print(f"  ⚠  Timetable fetch failed for {config['name']} — aborting PE/Enrichment pass")
+            return
+
+        # Determine which (date, watched_label) pairs have homework due for this pupil.
+        # Those slots will be represented by the homework event (Pass 4) instead, so the
+        # PE/Enrichment timetable event is suppressed from the parent calendar.
+        hw_for_suppression = cc_get_homework(cc, pupil["id"], from_str, to_str)
+        suppressed_slots: set[tuple[str, str]] = set()
+        if hw_for_suppression is None:
+            print(f"  ⚠  Homework fetch failed for {config['name']} — PE/Enrichment suppression skipped")
+        else:
+            for hw in hw_for_suppression:
+                hw_match = _subject_matches_watched(hw["subject"])
+                if hw_match:
+                    suppressed_slots.add((hw["due_date"], hw_match["label"]))
+
         for lesson in lessons:
             match = _subject_matches_watched(lesson["subject"])
             if not match:
+                continue
+
+            # Suppress if homework for this watched subject is due on the same day (same pupil).
+            # The homework event (Pass 4) will represent this slot at the lesson's time.
+            if (lesson["date"], match["label"]) in suppressed_slots:
                 continue
 
             fp    = f"{config['first_name']}|{_dt_to_rfc3339(lesson['start'])}"
@@ -830,18 +876,47 @@ def sync_homework(
             continue
 
         hw_list = cc_get_homework(cc, pupil["id"], from_str, to_str)
+        if hw_list is None:
+            print(f"  ⚠  Homework fetch failed for {config['name']} — skipping their events")
+            continue
         colour  = HOMEWORK_COLOUR.get(config["first_name"].lower())
+
+        # Build a (date, watched_label) → first-lesson lookup for this pupil so that
+        # homework for a watched subject can be timed to the lesson instead of 09:00.
+        lesson_lookup: dict[tuple[str, str], dict] = {}
+        pupil_timetable = cc_get_timetable(cc, pupil["id"], from_str, to_str)
+        if pupil_timetable is None:
+            print(f"  ⚠  Timetable fetch failed for {config['name']} — homework timing will default to 09:00")
+        else:
+            for tl in pupil_timetable:
+                lm = _subject_matches_watched(tl["subject"])
+                if lm:
+                    key = (tl["date"], lm["label"])
+                    if key not in lesson_lookup:   # first lesson on that day wins
+                        lesson_lookup[key] = tl
 
         for hw in hw_list:
             hw_id = str(hw["id"])
             cc_hw_ids_seen.add(hw_id)
 
-            # Content hash covers every field that could change on an amendment
-            hw_hash = f"{hw_id}|{hw['due_date']}|{hw['title']}|{hw['subject']}"
+            # Snap to lesson time if a watched-subject lesson falls on the homework due date.
+            hw_match        = _subject_matches_watched(hw["subject"])
+            matching_lesson = lesson_lookup.get((hw["due_date"], hw_match["label"])) if hw_match else None
 
-            due      = datetime.date.fromisoformat(hw["due_date"])
-            start_dt = datetime.datetime(due.year, due.month, due.day, 9,  0, 0, tzinfo=tz)
-            end_dt   = datetime.datetime(due.year, due.month, due.day, 10, 0, 0, tzinfo=tz)
+            if matching_lesson:
+                start_dt = matching_lesson["start"]
+                end_dt   = matching_lesson["end"]
+                if start_dt.tzinfo is None:
+                    start_dt = start_dt.replace(tzinfo=tz)
+                if end_dt.tzinfo is None:
+                    end_dt = end_dt.replace(tzinfo=tz)
+                # Include lesson start in hash so a rescheduled lesson triggers a calendar update
+                hw_hash = f"{hw_id}|{hw['due_date']}|{hw['title']}|{hw['subject']}|lesson:{_dt_to_rfc3339(start_dt)}"
+            else:
+                due      = datetime.date.fromisoformat(hw["due_date"])
+                start_dt = datetime.datetime(due.year, due.month, due.day, 9,  0, 0, tzinfo=tz)
+                end_dt   = datetime.datetime(due.year, due.month, due.day, 10, 0, 0, tzinfo=tz)
+                hw_hash  = f"{hw_id}|{hw['due_date']}|{hw['title']}|{hw['subject']}"
 
             # Sanitise title: prevent injection of special characters into calendar
             raw_title  = f"{config['first_name']}: {hw['subject']}: {hw['title']}"
@@ -911,10 +986,11 @@ def main() -> None:
     load_homework_colours()
 
     tz = ZoneInfo(TIMEZONE)
-    today = datetime.datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
-    window_end = today + datetime.timedelta(days=SYNC_DAYS)
+    today        = datetime.datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
+    window_start = today - datetime.timedelta(days=2)
+    window_end   = today + datetime.timedelta(days=SYNC_DAYS)
 
-    from_str = today.date().isoformat()
+    from_str = window_start.date().isoformat()
     # ClassCharts date ranges are inclusive; Google Calendar timeMax is exclusive.
     # Use the last in-window date for ClassCharts to keep both windows aligned.
     to_str   = (window_end - datetime.timedelta(days=1)).date().isoformat()
@@ -922,7 +998,7 @@ def main() -> None:
     print(f"\n{'═'*60}")
     print(f"  ClassCharts → Google Calendar Sync")
     print(f"  {'DRY RUN — no changes will be made' if dry_run else 'LIVE RUN'}")
-    print(f"  Window: {from_str}  →  {to_str}  ({SYNC_DAYS} days)")
+    print(f"  Window: {from_str}  →  {to_str}  ({SYNC_DAYS + 2} days)")
     print(f"{'═'*60}")
 
     # ── ClassCharts login ────────────────────────────────────────────────
@@ -947,25 +1023,30 @@ def main() -> None:
         print("✗  No pupils found with available Google Calendars — check GCAL_ID_* secrets")
         sys.exit(1)
 
+    # Build a config for ALL pupils for parent-calendar passes that don't need per-pupil calendars.
+    all_pupils_config = build_all_pupils_for_parent(cc_pupils)
+
     pupil_names = [p["name"] for p in pupils_config]
     print(f"Calendars: parent={cal_ids['parent'][:30]}… | {len(pupils_config)} pupil(s) with calendars")
 
     # ── Four sync passes ─────────────────────────────────────────────────
     sync_timetable(
         cc, cc_pupils_by_name, service, pupils_config,
-        today, window_end, from_str, to_str, dry_run,
+        window_start, window_end, from_str, to_str, dry_run,
     )
 
     # Pass 2–4 share the same cc session; timetable re-fetches are needed
     # inside each pass so results aren't cross-contaminated.
+    # These passes use all_pupils_config so a missing GCAL_ID_* for a child
+    # does not suppress their lessons from parent-calendar reminders.
     sync_no_school(
-        cc, cc_pupils_by_name, service, cal_ids["parent"], pupils_config,
-        today, window_end, from_str, to_str, dry_run,
+        cc, cc_pupils_by_name, service, cal_ids["parent"], all_pupils_config,
+        window_start, window_end, from_str, to_str, dry_run,
     )
 
     sync_pe_enrichment(
-        cc, cc_pupils_by_name, service, cal_ids["parent"], pupils_config,
-        today, window_end, from_str, to_str, dry_run,
+        cc, cc_pupils_by_name, service, cal_ids["parent"], all_pupils_config,
+        window_start, window_end, from_str, to_str, dry_run,
     )
 
     # Homework due dates can extend beyond the timetable window, so fetch
@@ -973,8 +1054,8 @@ def main() -> None:
     hw_end    = today + datetime.timedelta(days=60)
     hw_to_str = (hw_end - datetime.timedelta(days=1)).date().isoformat()
     sync_homework(
-        cc, cc_pupils_by_name, service, cal_ids["parent"], pupils_config,
-        today, hw_end, from_str, hw_to_str, dry_run,
+        cc, cc_pupils_by_name, service, cal_ids["parent"], all_pupils_config,
+        window_start, hw_end, from_str, hw_to_str, dry_run,
     )
 
     print(f"\n{'═'*60}")
