@@ -936,27 +936,32 @@ def sync_homework(
             continue
         colour  = HOMEWORK_COLOUR.get(config["first_name"].lower())
 
-        # Build a (date, watched_label) → first-lesson lookup for this pupil so that
-        # homework for a watched subject can be timed to the lesson instead of 09:00.
+        # Build a (date, normalised_subject) → first-lesson lookup for ALL subjects so
+        # that any homework can be timed to that day's lesson. Subject matching uses
+        # substring in either direction to handle minor naming differences between the
+        # homework and timetable entries in ClassCharts.
         lesson_lookup: dict[tuple[str, str], dict] = {}
         pupil_timetable = cc_get_timetable(cc, pupil["id"], from_str, to_str)
         if pupil_timetable is None:
             print(f"  ⚠  Timetable fetch failed for {config['name']} — homework timing will default to 09:00")
         else:
             for tl in pupil_timetable:
-                lm = _subject_matches_watched(tl["subject"])
-                if lm:
-                    key = (tl["date"], lm["label"])
-                    if key not in lesson_lookup:   # first lesson on that day wins
-                        lesson_lookup[key] = tl
+                key = (tl["date"], tl["subject"].strip().lower())
+                if key not in lesson_lookup:   # first lesson on that day wins
+                    lesson_lookup[key] = tl
 
         for hw in hw_list:
             hw_id = str(hw["id"])
             cc_hw_ids_seen.add(hw_id)
 
-            # Snap to lesson time if a watched-subject lesson falls on the homework due date.
-            hw_match        = _subject_matches_watched(hw["subject"])
-            matching_lesson = lesson_lookup.get((hw["due_date"], hw_match["label"])) if hw_match else None
+            # Find a timetable lesson on the due date whose subject matches the homework
+            # subject (substring in either direction, case-insensitive). Fall back to None.
+            hw_subj_norm    = hw["subject"].strip().lower()
+            matching_lesson = None
+            for (les_date, les_subj), lesson in lesson_lookup.items():
+                if les_date == hw["due_date"] and (hw_subj_norm in les_subj or les_subj in hw_subj_norm):
+                    matching_lesson = lesson
+                    break
 
             if matching_lesson:
                 start_dt = matching_lesson["start"]
