@@ -113,6 +113,20 @@ SUBJECT_ABBREVIATIONS: dict[str, str] = {
     "textiles & food": "T&F",
 }
 
+# Trailing noise words stripped from the end of a homework title before extracting
+# the head noun. These are meta/format words describing the homework medium, not the
+# task itself. Matching is case-insensitive. Add words here as new ones appear.
+HOMEWORK_TRAILING_NOISE: set[str] = {
+    "info", "information",
+    "sheet", "sheets",
+    "handout", "handouts",
+    "details",
+    "reminder", "reminders",
+    "resource", "resources",
+    "document", "documents", "doc", "docs",
+    "guide", "guides",
+}
+
 # Google Calendar colorId for homework events.
 # REST API colorIds: 1=Lavender 2=Sage 3=Grape 4=Flamingo 5=Banana
 #                   6=Tangerine 7=Peacock 8=Graphite 9=Blueberry 10=Basil 11=Tomato
@@ -771,8 +785,8 @@ def _extract_homework_label(title: str) -> str:
     Rules applied in order:
       1. Strip bilingual alternatives separated by " / " or " | "; keep the last segment.
       2. Strip trailing prepositional phrases beginning with: for, about, on, of.
-      3. Return the last word of the remaining text, capitalised — this is the head noun
-         of the noun phrase that names the task.
+      3. Strip any trailing noise/format words in HOMEWORK_TRAILING_NOISE repeatedly.
+      4. Return the last word of the remaining text, capitalised — the head noun.
     """
     # Step 1 — drop bilingual prefix (e.g. "Asesiad Llafar / Speaking Test" → "Speaking Test")
     for sep in (" / ", " | "):
@@ -783,10 +797,14 @@ def _extract_homework_label(title: str) -> str:
     # Step 2 — strip prepositional tail (e.g. "Test for alkalis and acids" → "Test")
     title = _PREP_TAIL_RE.sub("", title).strip()
 
-    # Step 3 — head noun = last word of the remaining noun phrase
+    # Step 3 — strip trailing noise words (e.g. "Exam Revision Info" → "Exam Revision")
     words = title.split()
+    while words and words[-1].lower() in HOMEWORK_TRAILING_NOISE:
+        words.pop()
+
+    # Step 4 — head noun = last word of the remaining noun phrase
     if not words:
-        return title
+        return title   # nothing survived — return original as fallback
     return words[-1].capitalize()
 
 
