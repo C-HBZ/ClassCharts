@@ -57,6 +57,7 @@ import argparse
 import datetime
 import json
 import os
+import re
 import sys
 import time
 import urllib.parse
@@ -103,6 +104,14 @@ PARENT_WATCHED_SUBJECTS: list[dict] = [
     {"keyword": "pe",         "label": "PE"},
     {"keyword": "enrichment", "label": "Enrichment"},
 ]
+
+# Subject abbreviations for homework event titles.
+# Key   = full subject name from ClassCharts (case-insensitive, stripped).
+# Value = replacement abbreviation to use in the calendar event title.
+# Any subject NOT listed here is truncated to its first 6 characters.
+SUBJECT_ABBREVIATIONS: dict[str, str] = {
+    "textiles & food": "T&F",
+}
 
 # Google Calendar colorId for homework events.
 # REST API colorIds: 1=Lavender 2=Sage 3=Grape 4=Flamingo 5=Banana
@@ -735,6 +744,48 @@ def _subject_matches_watched(subject: str) -> dict | None:
     return None
 
 
+# ────────────────────────────────────────────────────────────────────────────
+#  Homework title / subject formatting helpers
+# ────────────────────────────────────────────────────────────────────────────
+
+_PREP_TAIL_RE = re.compile(r"\s+\b(for|about|on|of)\b\s+.*$", re.IGNORECASE)
+
+
+def _abbreviate_subject(subject: str) -> str:
+    """Return a short subject label: a configured abbreviation or the first 6 characters."""
+    key = subject.strip().lower()
+    for full, abbrev in SUBJECT_ABBREVIATIONS.items():
+        if key == full:
+            return abbrev
+    return subject[:6]
+
+
+def _extract_homework_label(title: str) -> str:
+    """
+    Extract a concise head-noun label from a homework title.
+
+    Rules applied in order:
+      1. Strip bilingual alternatives separated by " / " or " | "; keep the last segment.
+      2. Strip trailing prepositional phrases beginning with: for, about, on, of.
+      3. Return the last word of the remaining text, capitalised — this is the head noun
+         of the noun phrase that names the task.
+    """
+    # Step 1 — drop bilingual prefix (e.g. "Asesiad Llafar / Speaking Test" → "Speaking Test")
+    for sep in (" / ", " | "):
+        if sep in title:
+            title = title.split(sep)[-1].strip()
+            break
+
+    # Step 2 — strip prepositional tail (e.g. "Test for alkalis and acids" → "Test")
+    title = _PREP_TAIL_RE.sub("", title).strip()
+
+    # Step 3 — head noun = last word of the remaining noun phrase
+    words = title.split()
+    if not words:
+        return title
+    return words[-1].capitalize()
+
+
 def sync_pe_enrichment(
     cc: requests.Session,
     cc_pupils_by_name: dict,
@@ -918,9 +969,9 @@ def sync_homework(
                 end_dt   = datetime.datetime(due.year, due.month, due.day, 10, 0, 0, tzinfo=tz)
                 hw_hash  = f"{hw_id}|{hw['due_date']}|{hw['title']}|{hw['subject']}"
 
-            # Sanitise title: prevent injection of special characters into calendar
-            raw_title  = f"{config['first_name']}: {hw['subject']}: {hw['title']}"
-            safe_title = " ".join(raw_title.split())
+            subj_label = _abbreviate_subject(hw["subject"])
+            hw_label   = _extract_homework_label(hw["title"])
+            safe_title = f"{config['first_name']}: {subj_label}: {hw_label}"
 
             desc = (
                 f"Pupil:   {config['name']}\n"
