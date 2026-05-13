@@ -113,6 +113,11 @@ SUBJECT_ABBREVIATIONS: dict[str, str] = {
     "textiles & food": "T&F",
 }
 
+# Maximum character lengths for the subject and homework labels used in calendar event titles.
+# These caps are applied after all abbreviation / head-noun rules, so the logic is unchanged.
+SUBJECT_MAX_CHARS  = 8   # subj_label portion of  "Pupil: Subject: Description"
+HW_LABEL_MAX_CHARS = 9   # hw_label  portion of  "Pupil: Subject: Description"
+
 # Trailing noise words stripped from the end of a homework title before extracting
 # the head noun. These are meta/format words describing the homework medium, not the
 # task itself. Matching is case-insensitive. Add words here as new ones appear.
@@ -765,17 +770,41 @@ def _subject_matches_watched(subject: str) -> dict | None:
 _PREP_TAIL_RE = re.compile(r"\s+\b(for|about|on|of)\b\s+.*$", re.IGNORECASE)
 
 
-def _abbreviate_subject(subject: str) -> str:
-    """Return a short subject label: a configured abbreviation or the first 6 characters.
+def _truncate_with_apostrophe(text: str, max_chars: int) -> str:
+    """Return *text* fitting within *max_chars*, apostrophe-marking any truncation.
 
-    Matching is substring-based (case-insensitive) so e.g. 'Textiles & Food Technology'
-    matches a configured key of 'textiles & food'.
+    If *text* already fits it is returned unchanged.  Otherwise the string is
+    cut to ``max_chars - 1`` characters and a trailing apostrophe is appended
+    so the total length equals *max_chars* (e.g. "Computi'" for "Computing"
+    at a limit of 8).  The apostrophe both fills the slot and signals the cut.
+    """
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars - 1] + "'"
+
+
+def _abbreviate_subject(subject: str) -> str:
+    """Return a display label for *subject* within SUBJECT_MAX_CHARS characters.
+
+    Rules applied in order:
+      1. If a key in SUBJECT_ABBREVIATIONS is a substring of the subject,
+         return that abbreviation (apostrophe-truncated if still over the limit).
+      2. If the full subject already fits within SUBJECT_MAX_CHARS, return it whole.
+      3. If the subject has multiple words, take the first (lead) word as the candidate.
+      4. Apostrophe-truncate the candidate to SUBJECT_MAX_CHARS if needed.
     """
     key = subject.strip().lower()
     for full, abbrev in SUBJECT_ABBREVIATIONS.items():
         if full.lower() in key:
-            return abbrev
-    return subject[:6]
+            return _truncate_with_apostrophe(abbrev, SUBJECT_MAX_CHARS)
+
+    subject = subject.strip()
+    if len(subject) <= SUBJECT_MAX_CHARS:
+        return subject
+
+    words = subject.split()
+    candidate = words[0] if len(words) > 1 else subject
+    return _truncate_with_apostrophe(candidate, SUBJECT_MAX_CHARS)
 
 
 def _extract_homework_label(title: str) -> str:
@@ -804,8 +833,11 @@ def _extract_homework_label(title: str) -> str:
 
     # Step 4 — head noun = last word of the remaining noun phrase
     if not words:
-        return title   # nothing survived — return original as fallback
-    return words[-1].capitalize()
+        # All words were noise — fall back to the first word of whatever survived steps 1–2
+        fallback_words = title.split()
+        fallback = fallback_words[0].capitalize() if fallback_words else title
+        return _truncate_with_apostrophe(fallback, HW_LABEL_MAX_CHARS)
+    return _truncate_with_apostrophe(words[-1].capitalize(), HW_LABEL_MAX_CHARS)
 
 
 def sync_pe_enrichment(
