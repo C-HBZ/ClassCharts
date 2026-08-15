@@ -771,10 +771,21 @@ def sync_no_timetable(
     """
     print("\n── PASS 2b: No TimeTBL ───────────────────────────────────")
 
-    # Determine the current week (Monday–Friday)
+    # Determine the week to check (upcoming week if weekend, current week if weekday)
     tz = ZoneInfo(TIMEZONE)
     today = datetime.datetime.now(tz).date()
-    monday = today - datetime.timedelta(days=today.weekday())
+    weekday = today.weekday()
+    
+    # If it's Saturday (5) or Sunday (6), check the NEXT Monday–Friday
+    # Otherwise, check the current Monday–Friday
+    if weekday >= 5:  # Saturday or Sunday
+        # Days until next Monday: 0=Mon, 1=Tue, ..., 5=Sat(->1), 6=Sun(->0)
+        days_until_monday = 7 - weekday
+        monday = today + datetime.timedelta(days=days_until_monday)
+    else:
+        # It's Monday–Friday; check this week
+        monday = today - datetime.timedelta(days=weekday)
+    
     friday = monday + datetime.timedelta(days=4)
     week_start = datetime.datetime.combine(monday, datetime.time.min, tzinfo=tz)
     week_end   = datetime.datetime.combine(friday + datetime.timedelta(days=1), datetime.time.min, tzinfo=tz)
@@ -795,10 +806,10 @@ def sync_no_timetable(
 
     if any_lessons_found:
         # Timetable exists for at least one pupil — no need for "No TimeTBL" marker
-        print(f"  Timetable(s) found for current week — no 'No TimeTBL' marker needed")
+        print(f"  Timetable(s) found for the week {week_from}–{week_to} — no 'No TimeTBL' marker needed")
         return
 
-    print(f"  No timetable found for current week ({week_from} to {week_to})")
+    print(f"  No timetable found for the week {week_from}–{week_to}")
 
     # Delete existing "No TimeTBL" markers in window
     existing = gcal_list_tagged_events(
