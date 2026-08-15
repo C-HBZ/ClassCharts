@@ -6,16 +6,25 @@ Automatically syncs school timetables, PE/Enrichment sessions, homework due date
 
 ## What it does
 
-Each time the script runs it performs four passes over the next 28 days:
+Each time the script runs it performs five passes:
 
-| Pass | What it creates | Where |
-|---|---|---|
-| 1 · Timetable | One event per lesson, colour-coded by subject | Each child's own school calendar |
-| 2 · No School | All-day "No School" marker for every weekday with no lessons | Parent calendar |
-| 3 · PE & Enrichment | Timed alert for every PE or Enrichment lesson | Parent calendar |
-| 4 · Homework | One event per homework item, placed on the due date at 09:00 | Parent calendar |
+| Pass | What it creates | Where | Period |
+|---|---|---|---|
+| 1 · Timetable | One event per lesson, colour-coded by subject | Each child's own school calendar | Next 28 days |
+| 2 · No School | All-day "No School" marker for every weekday with no lessons | Parent calendar | Next 28 days |
+| 2b · No TimeTBL | All-day "No TimeTBL" marker for Mon–Fri if no timetable exists (e.g. summer break) | Parent calendar | Current week |
+| 3 · PE & Enrichment | Timed alert for every PE or Enrichment lesson | Parent calendar | Next 28 days |
+| 4 · Homework | One event per homework item, placed on the due date at 09:00 | Parent calendar | Next 60 days |
 
 Changes in ClassCharts (amended due dates, room changes, cancelled lessons) are detected on the next run and updated or deleted automatically.
+
+### Pass 2b — No TimeTBL (when no timetable exists)
+
+During school holidays or breaks when timetable data is not yet available in ClassCharts, Pass 2b creates all-day "No TimeTBL" markers for the current week (Monday–Friday) in the parent calendar. This is distinct from "No School" which marks individual days when school is open but a specific day has no lessons. Each sync run:
+- Deletes any stale "No TimeTBL" markers from the current week
+- Checks if ANY child has lessons in the current week
+- If no timetable exists anywhere, creates "No TimeTBL" events (Mon–Fri)
+- If a timetable is added, the events are automatically cleaned up on the next run
 
 ---
 

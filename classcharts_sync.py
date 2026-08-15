@@ -176,6 +176,7 @@ GCal_SLEEP_S = 0.35   # between Google Calendar write operations
 TAG_TIMETABLE   = "cc_timetable"        # value "true" on timetable events
 TAG_FINGERPRINT = "cc_fingerprint"      # fingerprint string
 TAG_NO_SCHOOL   = "cc_no_school_marker" # value "true" on No School events
+TAG_NO_TIMETABLE = "cc_no_timetable"    # value "true" on No TimeTBL events
 TAG_PE_ENR      = "cc_pe_enrichment"    # value "true" on PE/Enrichment events
 TAG_HOMEWORK    = "cc_homework"         # value "true" on homework events
 TAG_HW_ID       = "cc_hw_id"           # ClassCharts homework id for dedup
@@ -750,6 +751,86 @@ def sync_no_school(
 
 
 # ════════════════════════════════════════════════════════════════════════════
+#  Sync pass 2b — No TimeTBL (empty timetable) → parent default calendar
+# ════════════════════════════════════════════════════════════════════════════
+
+def sync_no_timetable(
+    cc: requests.Session,
+    cc_pupils_by_name: dict,
+    service,
+    parent_cal_id: str,
+    pupils_config: list[dict],
+    from_str: str,
+    to_str: str,
+    dry_run: bool,
+) -> None:
+    """
+    If no timetable exists for the current week (Monday–Friday) across all pupils,
+    create "No TimeTBL" all-day events in the parent calendar for that week.
+    This indicates a period like summer break when no timetable data is available.
+    """
+    print("\n── PASS 2b: No TimeTBL ───────────────────────────────────")
+
+    # Determine the current week (Monday–Friday)
+    tz = ZoneInfo(TIMEZONE)
+    today = datetime.datetime.now(tz).date()
+    monday = today - datetime.timedelta(days=today.weekday())
+    friday = monday + datetime.timedelta(days=4)
+    week_start = datetime.datetime.combine(monday, datetime.time.min, tzinfo=tz)
+    week_end   = datetime.datetime.combine(friday + datetime.timedelta(days=1), datetime.time.min, tzinfo=tz)
+
+    week_from = monday.isoformat()
+    week_to   = friday.isoformat()
+
+    # Check if any pupil has lessons in the current week
+    any_lessons_found = False
+    for config in pupils_config:
+        pupil = cc_pupils_by_name.get(config["name"].lower())
+        if not pupil:
+            continue
+        lessons = cc_get_timetable(cc, pupil["id"], week_from, week_to)
+        if lessons is not None and len(lessons) > 0:
+            any_lessons_found = True
+            break
+
+    if any_lessons_found:
+        # Timetable exists for at least one pupil — no need for "No TimeTBL" marker
+        print(f"  Timetable(s) found for current week — no 'No TimeTBL' marker needed")
+        return
+
+    print(f"  No timetable found for current week ({week_from} to {week_to})")
+
+    # Delete existing "No TimeTBL" markers in window
+    existing = gcal_list_tagged_events(
+        service, parent_cal_id, TAG_NO_TIMETABLE, "true", week_start, week_end
+    )
+    for ev in existing:
+        gcal_delete_event(service, parent_cal_id, ev["id"], dry_run)
+    if existing:
+        print(f"  Removed {len(existing)} stale 'No TimeTBL' marker(s)")
+
+    # Create "No TimeTBL" markers for Mon–Fri of current week
+    created = 0
+    for i in range(5):  # 0=Mon, 1=Tue, ..., 4=Fri
+        day = monday + datetime.timedelta(days=i)
+        body = {
+            "summary": "No TimeTBL",
+            "start":   {"date": day.isoformat()},
+            "end":     {"date": (day + datetime.timedelta(days=1)).isoformat()},
+            "colorId": "5",  # Banana (yellow) — distinct from Peacock (No School)
+            "extendedProperties": {"private": {TAG_NO_TIMETABLE: "true"}},
+        }
+        gcal_create_event(service, parent_cal_id, body, dry_run)
+        created += 1
+        if not dry_run:
+            print(f"    No TimeTBL: {day.strftime('%A %-d %B %Y')}")
+        else:
+            print(f"    [DRY-RUN] No TimeTBL: {day.strftime('%A %-d %B %Y')}")
+
+    print(f"  Created {created} 'No TimeTBL' event(s)")
+
+
+# ════════════════════════════════════════════════════════════════════════════
 #  Sync pass 3 — PE & Enrichment → parent default calendar
 # ════════════════════════════════════════════════════════════════════════════
 
@@ -1164,6 +1245,11 @@ def main() -> None:
     sync_no_school(
         cc, cc_pupils_by_name, service, cal_ids["parent"], all_pupils_config,
         window_start, window_end, from_str, to_str, dry_run,
+    )
+
+    sync_no_timetable(
+        cc, cc_pupils_by_name, service, cal_ids["parent"], all_pupils_config,
+        from_str, to_str, dry_run,
     )
 
     sync_pe_enrichment(
