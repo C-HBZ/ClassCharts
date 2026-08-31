@@ -2,7 +2,7 @@
 """
 classcharts_sync.py  —  ClassCharts → Google Calendar Sync
 
-Runs four sync passes in sequence each time it is invoked:
+Runs four sync passes in sequence each time it is invoked :
 
   1. TIMETABLE   Fingerprint-based sync of each pupil's lessons into their
                  own named Google Calendar (matched by first name via
