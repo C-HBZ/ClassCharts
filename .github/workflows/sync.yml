@@ -3,7 +3,7 @@ name: ClassCharts Nightly Sync
 on:
   schedule:
     # Run every 30 mins every day
-    - cron: '09,39 * * * *'
+    - cron: '9,39 * * * *'
   workflow_dispatch:
 
 
