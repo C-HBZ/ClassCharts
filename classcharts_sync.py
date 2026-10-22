@@ -71,6 +71,8 @@ except ImportError:
 
 try:
     import requests
+    from requests.adapters import HTTPAdapter
+    from urllib3.util.retry import Retry
 except ImportError:
     sys.exit("ERROR: pip install requests")
 
@@ -231,6 +233,17 @@ def cc_login() -> tuple[requests.Session, list[dict]]:
 
     s = requests.Session()
     s.headers.update({"User-Agent": _BROWSER_UA})
+    retry = Retry(
+        total=3,
+        connect=3,
+        read=2,
+        status=3,
+        backoff_factor=1,
+        status_forcelist=(429, 500, 502, 503, 504),
+        allowed_methods=frozenset({"GET", "POST"}),
+        respect_retry_after_header=True,
+    )
+    s.mount("https://", HTTPAdapter(max_retries=retry))
 
     # Collect the initial session cookie
     s.get(f"{_CC_BASE}/parent/login", timeout=15)
