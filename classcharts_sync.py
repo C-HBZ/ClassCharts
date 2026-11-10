@@ -609,6 +609,21 @@ def lesson_fingerprint(lesson: dict) -> str:
     ])
 
 
+def _today_str() -> str:
+    return datetime.datetime.now(ZoneInfo(TIMEZONE)).date().isoformat()
+
+
+def _has_upcoming_lessons(lessons: list[dict]) -> bool:
+    """True if the feed has any lesson from today onwards."""
+    today = _today_str()
+    return any(l["date"] >= today for l in lessons)
+
+
+def _event_is_upcoming(ev: dict) -> bool:
+    start = ev.get("start") or {}
+    return (start.get("dateTime") or start.get("date") or "")[:10] >= _today_str()
+
+
 # ════════════════════════════════════════════════════════════════
 #  Sync pass 1 — Timetable → per-pupil calendars
 # ════════════════════════════════════════════════════════════════
@@ -640,10 +655,13 @@ def sync_timetable(
             service, cal_id, TAG_TIMETABLE, "true", window_start, window_end
         )
         existing_by_fp: dict[str, str] = {}   # fingerprint → event_id
+        upcoming_ids: set[str] = set()
         for ev in existing:
             fp = (ev.get("extendedProperties") or {}).get("private", {}).get(TAG_FINGERPRINT)
             if fp:
                 existing_by_fp[fp] = ev["id"]
+                if _event_is_upcoming(ev):
+                    upcoming_ids.add(ev["id"])
         print(f"    Existing tagged events: {len(existing_by_fp)}")
 
         # Step 2 — fetch desired timetable from ClassCharts
@@ -655,10 +673,17 @@ def sync_timetable(
 
         wanted: dict[str, dict] = {lesson_fingerprint(l): l for l in lessons}
 
-        # Step 3 — delete stale
+        # Step 3 — delete stale. If the feed has no lessons from today onwards
+        # but we already hold upcoming events, assume a ClassCharts outage and
+        # keep them; genuine breaks are recognised by lessons resuming later.
+        protect_upcoming = not _has_upcoming_lessons(lessons)
+        if protect_upcoming and upcoming_ids:
+            print(f"    ⚠  No upcoming lessons in feed — keeping {len(upcoming_ids)} existing upcoming event(s)")
         deleted = 0
         for fp, ev_id in existing_by_fp.items():
             if fp not in wanted:
+                if protect_upcoming and ev_id in upcoming_ids:
+                    continue
                 gcal_delete_event(service, cal_id, ev_id, dry_run)
                 deleted += 1
 
@@ -725,6 +750,11 @@ def sync_no_school(
             school_dates.add(l["date"])
 
     print(f"  School dates found (any pupil): {len(school_dates)}")
+
+    today = _today_str()
+    if not any(d >= today for d in school_dates):
+        print("  No upcoming lessons in feed (outage or long break) — leaving 'No School' markers unchanged")
+        return
 
     # Delete existing No School markers in window
     existing = gcal_list_tagged_events(
@@ -975,10 +1005,14 @@ def sync_pe_enrichment(
         service, parent_cal_id, TAG_PE_ENR, "true", window_start, window_end
     )
     existing_by_fp: dict[str, str] = {}  # fingerprint → event_id
+    upcoming_ids: set[str] = set()
     for ev in existing:
         fp = (ev.get("extendedProperties") or {}).get("private", {}).get(TAG_PE_FP)
         if fp:
             existing_by_fp[fp] = ev["id"]
+            if _event_is_upcoming(ev):
+                upcoming_ids.add(ev["id"])
+    any_upcoming_lessons = False
 
     # Build the full set of wanted PE/Enrichment events
     wanted: dict[str, dict] = {}  # fingerprint → event body
@@ -991,6 +1025,7 @@ def sync_pe_enrichment(
         if lessons is None:
             print(f"  ⚠  Timetable fetch failed for {config['name']} — aborting PE/Enrichment pass")
             return
+        any_upcoming_lessons = any_upcoming_lessons or _has_upcoming_lessons(lessons)
 
         # Determine which (date, watched_label) pairs have homework due for this pupil.
         # Those slots will be represented by the homework event (Pass 4) instead, so the
@@ -1035,9 +1070,13 @@ def sync_pe_enrichment(
             wanted[fp] = body
 
     # Delete stale events no longer in ClassCharts
+    # Keep upcoming events if the feed has no upcoming lessons at all (outage).
+    protect_upcoming = not any_upcoming_lessons
     deleted = 0
     for fp, ev_id in existing_by_fp.items():
         if fp not in wanted:
+            if protect_upcoming and ev_id in upcoming_ids:
+                continue
             gcal_delete_event(service, parent_cal_id, ev_id, dry_run)
             deleted += 1
 
