@@ -55,6 +55,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import html
 import json
 import os
 import re
@@ -115,24 +116,33 @@ SUBJECT_ABBREVIATIONS: dict[str, str] = {
     "textiles & food": "T&F",
 }
 
-# Maximum character lengths for the subject and homework labels used in calendar event titles.
-# These caps are applied after all abbreviation / head-noun rules, so the logic is unchanged.
+# Maximum character length for the subject label used in calendar event titles.
 SUBJECT_MAX_CHARS  = 8   # subj_label portion of  "Pupil: Subject: Description"
-HW_LABEL_MAX_CHARS = 9   # hw_label  portion of  "Pupil: Subject: Description"
 
-# Trailing noise words stripped from the end of a homework title before extracting
-# the head noun. These are meta/format words describing the homework medium, not the
-# task itself. Matching is case-insensitive. Add words here as new ones appear.
-HOMEWORK_TRAILING_NOISE: set[str] = {
-    "info", "information",
-    "sheet", "sheets",
-    "handout", "handouts",
-    "details",
-    "reminder", "reminders",
-    "resource", "resources",
-    "document", "documents", "doc", "docs",
-    "guide", "guides",
-}
+# Recognisable homework actions and objects, checked in priority order.
+HOMEWORK_LABEL_KEYWORDS: tuple[tuple[str, str], ...] = (
+    (r"\bequipment\b", "Equipment"),
+    (r"\bpapers?\b", "Paper"),
+    (r"\bpastry\b", "Pastry"),
+    (r"\bspreadsheets?\b", "Spreadsheet"),
+    (r"\bresearch\b", "Research"),
+    (r"\bpresentations?\b", "Presentation"),
+    (r"\bposters?\b", "Poster"),
+    (r"\bdissection\b", "Dissection"),
+    (r"\btrigonometry\b", "Trigonometry"),
+    (r"\bequations?\b", "Equations"),
+    (r"\bmuffins?\b", "Muffins"),
+    (r"\brolls?\b", "Rolls"),
+    (r"\bmousse\b", "Mousse"),
+    (r"\bcheesecake\b", "Cheesecake"),
+    (r"\bcampaign\b", "Campaign"),
+    (r"\bmedicine\b", "Medicine"),
+    (r"\bletters?\b", "Letter"),
+    (r"\breading\b", "Reading"),
+    (r"\bclassroom\b", "Classroom"),
+    (r"\bworkbooks?\b", "Workbook"),
+    (r"\bbooklets?\b", "Booklet"),
+)
 
 # Google Calendar colorId for homework events.
 # REST API colorIds: 1=Lavender 2=Sage 3=Grape 4=Flamingo 5=Banana
@@ -913,9 +923,6 @@ def _subject_matches_watched(subject: str) -> dict | None:
 #  Homework title / subject formatting helpers
 # ────────────────────────────────────────────────────────────────
 
-_PREP_TAIL_RE = re.compile(r"\s+\b(for|about|on|of)\b\s+.*$", re.IGNORECASE)
-
-
 def _truncate_with_apostrophe(text: str, max_chars: int) -> str:
     """Return *text* fitting within *max_chars*, apostrophe-marking any truncation.
 
@@ -955,35 +962,26 @@ def _abbreviate_subject(subject: str) -> str:
 
 def _extract_homework_label(title: str) -> str:
     """
-    Extract a concise head-noun label from a homework title.
+    Choose a short, useful label for a homework title.
 
-    Rules applied in order:
-      1. Strip bilingual alternatives separated by " / " or " | "; keep the last segment.
-      2. Strip trailing prepositional phrases beginning with: for, about, on, of.
-      3. Strip any trailing noise/format words in HOMEWORK_TRAILING_NOISE repeatedly.
-      4. Return the last word of the remaining text, capitalised — the head noun.
+    Assessment language takes precedence, then known tasks and objects. Generic
+    homework titles and unrecognised text use a safe "Homework" fallback rather
+    than an arbitrary last word, number, or status.
     """
-    # Step 1 — drop bilingual prefix (e.g. "Asesiad Llafar / Speaking Test" → "Speaking Test")
-    for sep in (" / ", " | "):
-        if sep in title:
-            title = title.split(sep)[-1].strip()
-            break
+    normalized = html.unescape(html.unescape(title or "")).strip().lower()
 
-    # Step 2 — strip prepositional tail (e.g. "Test for alkalis and acids" → "Test")
-    title = _PREP_TAIL_RE.sub("", title).strip()
+    if re.search(r"\bexams?\b", normalized):
+        return "Exam"
+    if re.search(r"\b(?:tests?|assessments?|revise|revision|mock)\b", normalized):
+        return "Test"
+    if re.search(r"^\s*homework\b|\bhomework\s*(?:[-:]\s*)?(?:\d+)?\s*$", normalized):
+        return "Homework"
 
-    # Step 3 — strip trailing noise words (e.g. "Exam Revision Info" → "Exam Revision")
-    words = title.split()
-    while words and words[-1].lower() in HOMEWORK_TRAILING_NOISE:
-        words.pop()
+    for pattern, label in HOMEWORK_LABEL_KEYWORDS:
+        if re.search(pattern, normalized):
+            return label
 
-    # Step 4 — head noun = last word of the remaining noun phrase
-    if not words:
-        # All words were noise — fall back to the first word of whatever survived steps 1–2
-        fallback_words = title.split()
-        fallback = fallback_words[0].capitalize() if fallback_words else title
-        return _truncate_with_apostrophe(fallback, HW_LABEL_MAX_CHARS)
-    return _truncate_with_apostrophe(words[-1].capitalize(), HW_LABEL_MAX_CHARS)
+    return "Homework"
 
 
 def sync_pe_enrichment(

@@ -62,17 +62,15 @@ Rules applied in order:
 
 You can add subjects to `SUBJECT_ABBREVIATIONS` in the script for full control over any subject label.
 
-### Description label (max 9 characters)
+### Homework label
 
-The description is extracted from the homework title using the following rules (applied in order):
+The final part of the title is chosen to describe the homework action or useful task:
 
-1. **Bilingual titles** — if the title contains ` / ` or ` | `, the last segment is kept (e.g. `"Asesiad Llafar / Speaking Test"` → `"Speaking Test"`).
-2. **Prepositional tail** — trailing phrases starting with *for*, *about*, *on*, or *of* are stripped (e.g. `"Test for alkalis and acids"` → `"Test"`).
-3. **Noise words** — trailing format/medium words (info, sheet, handout, reminder, resource, document, guide, etc.) are stripped repeatedly (e.g. `"Exam Revision Info"` → `"Exam Revision"`).
-4. **Head noun** — the last word of the remaining phrase is capitalised and used as the label (e.g. `"Exam Revision"` → `"Revision"`).
-5. **Apostrophe truncation** — if the head noun exceeds 9 characters, it is cut to 8 characters with a trailing apostrophe (e.g. `"Electrochemistry"` → `"Electroc'"`).
+1. **Assessment intent** — titles mentioning an exam use `Exam`; otherwise titles mentioning a test, assessment, mock, revision, or revising use `Test`.
+2. **Recognised task or object** — known terms such as `Paper`, `Equipment`, `Pastry`, `Spreadsheet`, `Poster`, and `Booklet` are used instead of an unhelpful trailing word (for example, `"Puff pastry Christmas tree"` → `Pastry`).
+3. **Safe fallback** — generic homework titles, dates, status words, and titles without a recognised task use `Homework`, rather than guessing from the last word.
 
-You can extend `HOMEWORK_TRAILING_NOISE` in the script to add further words to strip.
+The label is based on the full homework title, while the full title remains in the event description. Recognised labels are kept intact for readability, even when a useful word is longer than 9 characters.
 
 ---
 
