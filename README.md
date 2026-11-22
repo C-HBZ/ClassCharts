@@ -339,11 +339,12 @@ The spoken homework format is `Lewis. Homework for History, "Chapter 4", due tod
 
 ### Raspberry Pi installation and configuration
 
-Copy both Python files to `/home/pi/` so the cron commands below can run them, then install the dependencies with the Pi's system Python:
+Copy both Python files into `/home/pi/home_notifiers/` so the cron commands below can run them, then install the dependencies with the Pi's system Python:
 
 ```bash
-sudo install -m 755 /path/to/ClassCharts/home_notifiers/calendar_home_notifier.py /home/pi/
-sudo install -m 755 /path/to/ClassCharts/home_notifiers/homework_notifier.py /home/pi/
+mkdir -p /home/pi/home_notifiers
+sudo install -m 755 /path/to/ClassCharts/home_notifiers/calendar_home_notifier.py /home/pi/home_notifiers/
+sudo install -m 755 /path/to/ClassCharts/home_notifiers/homework_notifier.py /home/pi/home_notifiers/
 sudo apt update
 sudo apt install -y python3-pip
 /usr/bin/python3 -m pip install --user -r /path/to/ClassCharts/home_notifiers/requirements.txt
@@ -351,13 +352,29 @@ sudo apt install -y python3-pip
 
 On Raspberry Pi OS versions whose system Python blocks `pip install --user` as externally managed, add `--break-system-packages` to that pip command. This keeps the installed packages in the Pi user's site directory while allowing the cron commands to continue using `/usr/bin/python3`.
 
-Configure these environment variables on the Pi:
+Codespaces secrets are not automatically available on the Pi. Create a private environment file for the local notifier:
 
-- `CALENDAR_ICAL_URL` — required private Google Calendar iCal feed URL. Treat it as a password: never print it, paste it into source code, or commit it.
-- `HOME_SPEAKER_NAME` — the speaker's exact Google Home / Chromecast name; defaults to `Lounge speaker` if omitted.
-- `HOME_SPEAKER_IP` — the speaker's local IP address; optional, but setting it can make device discovery more reliable.
+```bash
+mkdir -p /home/pi/home_notifiers
+nano /home/pi/home_notifiers/notifier.env
+```
 
-Codespaces secrets are not automatically available on the Pi. For manual runs, enter the values into the shell environment, for example by exporting them in a private terminal session. To make them available to cron, add the three `NAME=value` environment assignments at the top of the `pi` user's crontab using `crontab -e`; leave the two job lines below unchanged. Do not put secret values in this README, source files, or a file tracked by Git. Keep the Pi user's account and crontab private and do not share `crontab -l` output.
+Put these exports in `notifier.env`, replacing the calendar placeholder with your private iCal feed URL:
+
+```bash
+export CALENDAR_ICAL_URL='REPLACE_WITH_YOUR_PRIVATE_ICAL_FEED_URL'
+export HOME_SPEAKER_IP='192.168.1.xx'
+export HOME_SPEAKER_NAME='Lounge speaker'
+```
+
+`CALENDAR_ICAL_URL` is required. `HOME_SPEAKER_NAME` defaults to `Lounge speaker` if omitted, and `HOME_SPEAKER_IP` is optional but can make Chromecast discovery more reliable. Treat the calendar feed URL like a password: do not print it, paste it into source code, or commit it. Restrict access to the config file:
+
+```bash
+chmod 700 /home/pi/home_notifiers
+chmod 600 /home/pi/home_notifiers/notifier.env
+```
+
+Do not put secret values in this README, source files, or any file tracked by Git.
 
 ### Manual runs and dry-run tests
 
@@ -365,24 +382,29 @@ With the variables set in the shell, run:
 
 ```bash
 cd /home/pi
-/usr/bin/python3 calendar_home_notifier.py --dry-run
-/usr/bin/python3 calendar_home_notifier.py --debug --dry-run
-/usr/bin/python3 homework_notifier.py --dry-run
+. /home/pi/home_notifiers/notifier.env
+/usr/bin/python3 /home/pi/home_notifiers/calendar_home_notifier.py --dry-run
+/usr/bin/python3 /home/pi/home_notifiers/calendar_home_notifier.py --debug --dry-run
+/usr/bin/python3 /home/pi/home_notifiers/homework_notifier.py --dry-run
 ```
 
 Each dry run retrieves the calendar and prints the proposed announcement, but does not generate audio or connect to Chromecast. To announce immediately, run the corresponding script without `--dry-run`.
 
 ### Raspberry Pi cron schedule and logs
 
-Add these exact job lines to the Pi user's crontab. These jobs run on the Pi, not in Codespaces:
+Add these lines to the Pi user's crontab with `crontab -e`. These jobs run on the Pi, not in Codespaces:
 
 ```cron
-15 7 * * * /usr/bin/python3 /home/pi/calendar_home_notifier.py >> /home/pi/notifier.log 2>&1
-
-0 17 * * 0-4 /usr/bin/python3 /home/pi/homework_notifier.py >> /home/pi/homework.log 2>&1
+15 7 * * * . /home/pi/home_notifiers/notifier.env && /usr/bin/python3 /home/pi/home_notifiers/calendar_home_notifier.py >> /home/pi/home_notifiers/notifier.log 2>&1
+0 17 * * 0-4 . /home/pi/home_notifiers/notifier.env && /usr/bin/python3 /home/pi/home_notifiers/homework_notifier.py >> /home/pi/home_notifiers/homework.log 2>&1
+0 16 * * 0 /home/pi/update_home_notifiers.sh >/dev/null 2>&1
 ```
 
-The first job announces today's matching events daily at 07:15 and appends output to `/home/pi/notifier.log`. The second announces homework for the following day at 17:00 Sunday through Thursday and appends output to `/home/pi/homework.log`.
+Cron's first five fields are minute, hour, day of month, month, and day of week. So the first line runs every day at 07:15, and the second runs at 17:00 Sunday through Thursday (`0-4`). In each notifier line, `. /home/pi/home_notifiers/notifier.env` loads the exported variables into that job's shell; `&&` means Python runs only if loading the file succeeds. `>>` appends the Python script's output to the named log, and `2>&1` sends the Python script's errors to that same log. If loading the environment file fails, Python will not run, and the shell error may be sent by cron rather than written to the notifier log.
+
+The third line runs `/home/pi/update_home_notifiers.sh` at 16:00 every Sunday (`0`), before that day's homework announcement. `>/dev/null 2>&1` discards all output, including errors, so failures will be hard to diagnose; consider appending it to `/home/pi/home_notifiers/update.log` instead. Automatic updates are convenient, but make sure the update script only replaces the intended program files and never deletes or overwrites `notifier.env` or the logs. Automatically running new code from the repository without reviewing it is less safe than updating manually or pinning a reviewed revision.
+
+The notifier logs are `/home/pi/home_notifiers/notifier.log` and `/home/pi/home_notifiers/homework.log`.
 
 ### Troubleshooting
 
