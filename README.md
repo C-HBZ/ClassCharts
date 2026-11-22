@@ -317,6 +317,82 @@ No hardcoded names in the script — it's safe to make the repo public. Adding a
 
 ---
 
+## Raspberry Pi Home Notifiers
+
+The independent scripts in [`home_notifiers/`](home_notifiers/) announce calendar events and homework through a Google Home / Chromecast speaker. They do not import or call the ClassCharts sync script and are not run by the GitHub Actions workflow.
+
+### Scripts
+
+- `calendar_home_notifier.py` announces today's events for Lewis or Austin. Ordinary events are selected by title; homework events (identified by “homework” in the title or by the structured homework fields) use the description's `Pupil`, `Subject`, and `Title` fields and are announced as due today. `--debug` prints all events found for today, and `--dry-run` prints the announcement without generating audio or using the speaker.
+- `homework_notifier.py` finds tomorrow's homework events (identified by “homework” in the event title or by the structured homework fields), identifies Lewis or Austin from the event description's `Pupil` field (or the title if that field is absent), and announces the description's subject and homework title as due tomorrow. Its `--dry-run` option prints the announcement without generating audio or using the speaker.
+
+Homework event descriptions are expected to contain fields like:
+
+```text
+Pupil: Lewis SURNAME
+Subject: History
+Title: Chapter 4
+Due: YYYY-MM-DD
+```
+
+The spoken homework format is `Lewis. Homework for History, "Chapter 4", due today` in the morning notifier and `Lewis. Homework for History, "Chapter 4", due tomorrow` in the evening notifier. The due wording is based on which day the script checks; it does not calculate the wording from the `Due` field.
+
+### Raspberry Pi installation and configuration
+
+Copy both Python files to `/home/pi/` so the cron commands below can run them, then install the dependencies with the Pi's system Python:
+
+```bash
+sudo install -m 755 /path/to/ClassCharts/home_notifiers/calendar_home_notifier.py /home/pi/
+sudo install -m 755 /path/to/ClassCharts/home_notifiers/homework_notifier.py /home/pi/
+sudo apt update
+sudo apt install -y python3-pip
+/usr/bin/python3 -m pip install --user -r /path/to/ClassCharts/home_notifiers/requirements.txt
+```
+
+On Raspberry Pi OS versions whose system Python blocks `pip install --user` as externally managed, add `--break-system-packages` to that pip command. This keeps the installed packages in the Pi user's site directory while allowing the cron commands to continue using `/usr/bin/python3`.
+
+Configure these environment variables on the Pi:
+
+- `CALENDAR_ICAL_URL` — required private Google Calendar iCal feed URL. Treat it as a password: never print it, paste it into source code, or commit it.
+- `HOME_SPEAKER_NAME` — the speaker's exact Google Home / Chromecast name; defaults to `Lounge speaker` if omitted.
+- `HOME_SPEAKER_IP` — the speaker's local IP address; optional, but setting it can make device discovery more reliable.
+
+Codespaces secrets are not automatically available on the Pi. For manual runs, enter the values into the shell environment, for example by exporting them in a private terminal session. To make them available to cron, add the three `NAME=value` environment assignments at the top of the `pi` user's crontab using `crontab -e`; leave the two job lines below unchanged. Do not put secret values in this README, source files, or a file tracked by Git. Keep the Pi user's account and crontab private and do not share `crontab -l` output.
+
+### Manual runs and dry-run tests
+
+With the variables set in the shell, run:
+
+```bash
+cd /home/pi
+/usr/bin/python3 calendar_home_notifier.py --dry-run
+/usr/bin/python3 calendar_home_notifier.py --debug --dry-run
+/usr/bin/python3 homework_notifier.py --dry-run
+```
+
+Each dry run retrieves the calendar and prints the proposed announcement, but does not generate audio or connect to Chromecast. To announce immediately, run the corresponding script without `--dry-run`.
+
+### Raspberry Pi cron schedule and logs
+
+Add these exact job lines to the Pi user's crontab. These jobs run on the Pi, not in Codespaces:
+
+```cron
+15 7 * * * /usr/bin/python3 /home/pi/calendar_home_notifier.py >> /home/pi/notifier.log 2>&1
+
+0 17 * * 0-4 /usr/bin/python3 /home/pi/homework_notifier.py >> /home/pi/homework.log 2>&1
+```
+
+The first job announces today's matching events daily at 07:15 and appends output to `/home/pi/notifier.log`. The second announces homework for the following day at 17:00 Sunday through Thursday and appends output to `/home/pi/homework.log`.
+
+### Troubleshooting
+
+- **Calendar retrieval:** verify the Pi has internet access and that `CALENDAR_ICAL_URL` is set correctly; the feed URL is intentionally omitted from error output.
+- **Audio generation:** confirm the Pi can reach the internet, as Google Text-to-Speech requires it, and that the listed packages are installed for `/usr/bin/python3`.
+- **Chromecast playback:** confirm the speaker is powered on and on the same local network, `HOME_SPEAKER_NAME` matches its device name, and the Pi can reach it. Set `HOME_SPEAKER_IP` to its reserved local address if discovery fails.
+- Review the appropriate log file listed above for other errors. Use a dry run to isolate calendar retrieval and filtering from audio and speaker issues.
+
+---
+
 ## License
 
 See [LICENSE](LICENSE)
