@@ -119,6 +119,30 @@ def _is_homework_event(summary, fields):
     )
 
 
+def _clean_homework_title(subject, title):
+    clean = title.strip()
+
+    subject_re = re.compile(
+        r'^' + re.escape(subject.strip()) + r'\s*(?:[-:]\s*)?',
+        re.IGNORECASE
+    )
+    clean = subject_re.sub('', clean, count=1).strip()
+
+    clean = re.sub(
+        r'^homework\s*(?:[-:]\s*)?',
+        '',
+        clean,
+        count=1,
+        flags=re.IGNORECASE
+    ).strip()
+
+    clean = re.sub(r'\s*\(\d+\s*booklets?\)\s*$', '', clean, flags=re.IGNORECASE).strip()
+    if re.fullmatch(r'\d+', clean):
+        return ''
+
+    return clean
+
+
 def _format_homework(fields, due_label):
     subject = fields.get('subject', '').replace('_', ' ').strip()
     title = fields.get('title', '').replace('_', ' ').strip()
@@ -126,7 +150,12 @@ def _format_homework(fields, due_label):
     if not subject or not title:
         return None
 
-    return f'Homework for {subject}, "{title}", due {due_label}'
+    clean_title = _clean_homework_title(subject, title)
+
+    if not clean_title:
+        return f'Homework for {subject}, due {due_label}'
+
+    return f'Homework for {subject}, "{clean_title}", due {due_label}'
 
 
 def fetch_todays_matching_titles():

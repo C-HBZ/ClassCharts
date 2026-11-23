@@ -46,7 +46,7 @@ Just keep your `.env` file and repository secrets private.
 Homework events in the parent calendar use this format:
 
 ```
-Pupil: Subject: Description
+Pupil Subject Description
 ```
 
 The script applies intelligent abbreviation rules to keep titles short enough for wall-mounted or compact calendar displays.
@@ -333,7 +333,7 @@ Title: Chapter 4
 Due: YYYY-MM-DD
 ```
 
-The spoken homework format is `Lewis. Homework for History, "Chapter 4", due today` in the morning notifier and `Lewis. Homework for History, "Chapter 4", due tomorrow` in the evening notifier. The due wording is based on which day the script checks; it does not calculate the wording from the `Due` field.
+The spoken homework format is `Lewis. Homework for History, "Chapter 4", due today` in the morning notifier and `Lewis. Homework for History, "Chapter 4", due tomorrow` in the evening notifier. Leading subject names and generic “Homework” prefixes are removed from the title so the subject and word homework are not spoken twice. The due wording is based on which day the script checks; it does not calculate the wording from the `Due` field.
 
 ### Raspberry Pi installation and configuration
 

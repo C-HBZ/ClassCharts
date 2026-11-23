@@ -1179,7 +1179,7 @@ def sync_homework(
                 # Include lesson start in hash so a rescheduled lesson triggers a calendar update
                 subj_label = _abbreviate_subject(hw["subject"])
                 hw_label   = _extract_homework_label(hw["title"])
-                safe_title = f"{config['first_name']}: {subj_label}: {hw_label}"
+                safe_title = f"{config['first_name']} {subj_label} {hw_label}"
                 hw_hash    = f"{hw_id}|{hw['due_date']}|{safe_title}|lesson:{_dt_to_rfc3339(start_dt)}"
             else:
                 due        = datetime.date.fromisoformat(hw["due_date"])
@@ -1187,7 +1187,7 @@ def sync_homework(
                 end_dt     = datetime.datetime(due.year, due.month, due.day, 10, 0, 0, tzinfo=tz)
                 subj_label = _abbreviate_subject(hw["subject"])
                 hw_label   = _extract_homework_label(hw["title"])
-                safe_title = f"{config['first_name']}: {subj_label}: {hw_label}"
+                safe_title = f"{config['first_name']} {subj_label} {hw_label}"
                 hw_hash    = f"{hw_id}|{hw['due_date']}|{safe_title}"
 
             desc = (
