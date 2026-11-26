@@ -19,9 +19,14 @@ import time
 from datetime import date
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 
-import requests
 import recurring_ical_events
-from icalendar import Calendar
+
+from notifier_reliability import (
+    already_succeeded,
+    fetch_calendar,
+    generate_audio,
+    record_success,
+)
 
 # ------------------------------------------------------------
 # Configuration
@@ -47,21 +52,7 @@ TTS_FILE = os.path.join(tempfile.gettempdir(), 'cal_announcement.mp3')
 # ------------------------------------------------------------
 
 def _fetch_calendar():
-    try:
-        response = requests.get(CALENDAR_ICAL_URL, timeout=15)
-        response.raise_for_status()
-    except requests.RequestException:
-        raise RuntimeError(
-            'Could not retrieve the calendar feed; check the network and '
-            'CALENDAR_ICAL_URL configuration.'
-        ) from None
-
-    try:
-        return Calendar.from_ical(response.content)
-    except ValueError:
-        raise RuntimeError(
-            'Could not parse the calendar feed; check that it is a valid iCal feed.'
-        ) from None
+    return fetch_calendar(CALENDAR_ICAL_URL)
 
 
 def debug_dump_events():
@@ -206,13 +197,7 @@ def build_message(titles):
 # ------------------------------------------------------------
 
 def generate_tts(message):
-    from gtts import gTTS
-
-    print('[tts] Generating audio...')
-
-    gTTS(text=message, lang='en').save(TTS_FILE)
-
-    print(f'[tts] Saved to {TTS_FILE}')
+    return generate_audio(message, TTS_FILE)
 
 # ------------------------------------------------------------
 # Chromecast
@@ -251,12 +236,12 @@ def _serve_file(filepath, port, duration=90):
     server.serve_forever()
 
 
-def cast_to_speaker(message):
+def cast_to_speaker(audio_path, content_type):
     import pychromecast
 
     local_ip = get_local_ip()
 
-    filename = os.path.basename(TTS_FILE)
+    filename = os.path.basename(audio_path)
 
     audio_url = (
         f'http://{local_ip}:{SERVE_PORT}/{filename}'
@@ -264,7 +249,7 @@ def cast_to_speaker(message):
 
     thread = threading.Thread(
         target=_serve_file,
-        args=(TTS_FILE, SERVE_PORT),
+        args=(audio_path, SERVE_PORT),
         daemon=True,
     )
 
@@ -318,7 +303,7 @@ def cast_to_speaker(message):
 
     mc = cast.media_controller
 
-    mc.play_media(audio_url, 'audio/mp3')
+    mc.play_media(audio_url, content_type)
 
     playback_deadline = time.monotonic() + 30
     while not mc.status.player_is_playing:
@@ -361,7 +346,24 @@ def main():
         help='Print all events found in the calendar.'
     )
 
+    parser.add_argument(
+        '--force',
+        action='store_true',
+        help='Announce even if today has already been announced successfully.'
+    )
+
     args = parser.parse_args()
+    scheduled_date = date.today()
+
+    if not args.dry_run and not args.force and already_succeeded(
+        'calendar',
+        scheduled_date
+    ):
+        print(
+            f'[status] Calendar announcement for {scheduled_date} '
+            'already completed; skipping duplicate.'
+        )
+        return
 
     print('Fetching calendar...')
 
@@ -378,9 +380,11 @@ def main():
         print('[dry-run] Skipping cast.')
         return
 
-    generate_tts(message)
+    audio_path, content_type = generate_tts(message)
 
-    cast_to_speaker(message)
+    cast_to_speaker(audio_path, content_type)
+    record_success('calendar', scheduled_date)
+    print(f'[status] Success recorded for {scheduled_date}.')
 
 
 if __name__ == '__main__':

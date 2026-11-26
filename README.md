@@ -337,16 +337,20 @@ The spoken homework format is `Lewis. Homework for History, "Chapter 4", due tod
 
 ### Raspberry Pi installation and configuration
 
-Copy both Python files into `/home/pi/home_notifiers/` so the cron commands below can run them, then install the dependencies with the Pi's system Python:
+Copy both notifier scripts and their shared helper into `/home/pi/home_notifiers/`, and install the updater outside that directory so it can safely update the notifier files. Then install the dependencies with the Pi's system Python:
 
 ```bash
 mkdir -p /home/pi/home_notifiers
 sudo install -m 755 /path/to/ClassCharts/home_notifiers/calendar_home_notifier.py /home/pi/home_notifiers/
 sudo install -m 755 /path/to/ClassCharts/home_notifiers/homework_notifier.py /home/pi/home_notifiers/
+sudo install -m 644 /path/to/ClassCharts/home_notifiers/notifier_reliability.py /home/pi/home_notifiers/
+sudo install -m 755 /path/to/ClassCharts/home_notifiers/update_home_notifiers.sh /home/pi/update_home_notifiers.sh
 sudo apt update
-sudo apt install -y python3-pip
+sudo apt install -y python3-pip espeak-ng
 /usr/bin/python3 -m pip install --user -r /path/to/ClassCharts/home_notifiers/requirements.txt
 ```
+
+`espeak-ng` is a small, open-source text-to-speech (TTS) program that runs locally on the Pi. It is the offline fallback when Google's online TTS service is unavailable; its voice is more synthetic, but it does not need internet access. It is an operating-system package, not a Python package, so it is installed with `apt` and is documented in `requirements.txt` rather than listed as a pip dependency. The Python dependencies (`requests`, `recurring-ical-events`, `icalendar`, `gTTS`, and `PyChromecast`) are installed by the pip command above.
 
 On Raspberry Pi OS versions whose system Python blocks `pip install --user` as externally managed, add `--break-system-packages` to that pip command. This keeps the installed packages in the Pi user's site directory while allowing the cron commands to continue using `/usr/bin/python3`.
 
@@ -387,28 +391,34 @@ cd /home/pi
 ```
 
 Each dry run retrieves the calendar and prints the proposed announcement, but does not generate audio or connect to Chromecast. To announce immediately, run the corresponding script without `--dry-run`.
+After a successful announcement, the script records a per-date marker under `/home/pi/.local/state/home_notifiers/` so later scheduled retries do not repeat it. Use `--force` to deliberately announce again.
 
 ### Raspberry Pi cron schedule and logs
 
 Add these lines to the Pi user's crontab with `crontab -e`. These jobs run on the Pi, not in Codespaces:
 
 ```cron
-15 7 * * * . /home/pi/home_notifiers/notifier.env && /usr/bin/python3 /home/pi/home_notifiers/calendar_home_notifier.py >> /home/pi/home_notifiers/notifier.log 2>&1
-0 17 * * 0-4 . /home/pi/home_notifiers/notifier.env && /usr/bin/python3 /home/pi/home_notifiers/homework_notifier.py >> /home/pi/home_notifiers/homework.log 2>&1
-0 16 * * 0 /home/pi/update_home_notifiers.sh >/dev/null 2>&1
+15 7 * * * . /home/pi/home_notifiers/notifier.env && /usr/bin/python3 -u /home/pi/home_notifiers/calendar_home_notifier.py >> /home/pi/home_notifiers/notifier.log 2>&1
+25 7 * * * . /home/pi/home_notifiers/notifier.env && /usr/bin/python3 -u /home/pi/home_notifiers/calendar_home_notifier.py >> /home/pi/home_notifiers/notifier.log 2>&1
+35 7 * * * . /home/pi/home_notifiers/notifier.env && /usr/bin/python3 -u /home/pi/home_notifiers/calendar_home_notifier.py >> /home/pi/home_notifiers/notifier.log 2>&1
+0 17 * * 0-4 . /home/pi/home_notifiers/notifier.env && /usr/bin/python3 -u /home/pi/home_notifiers/homework_notifier.py >> /home/pi/home_notifiers/homework.log 2>&1
+5 17 * * 0-4 . /home/pi/home_notifiers/notifier.env && /usr/bin/python3 -u /home/pi/home_notifiers/homework_notifier.py >> /home/pi/home_notifiers/homework.log 2>&1
+15 17 * * 0-4 . /home/pi/home_notifiers/notifier.env && /usr/bin/python3 -u /home/pi/home_notifiers/homework_notifier.py >> /home/pi/home_notifiers/homework.log 2>&1
+0 16 * * 0 /home/pi/update_home_notifiers.sh >> /home/pi/home_notifiers/update.log 2>&1
 ```
 
-Cron's first five fields are minute, hour, day of month, month, and day of week. So the first line runs every day at 07:15, and the second runs at 17:00 Sunday through Thursday (`0-4`). In each notifier line, `. /home/pi/home_notifiers/notifier.env` loads the exported variables into that job's shell; `&&` means Python runs only if loading the file succeeds. `>>` appends the Python script's output to the named log, and `2>&1` sends the Python script's errors to that same log. If loading the environment file fails, Python will not run, and the shell error may be sent by cron rather than written to the notifier log.
+Cron's first five fields are minute, hour, day of month, month, and day of week. The three calendar runs give temporary failures another chance at 07:25 and 07:35; the homework runs retry at 17:05 and 17:15 Sunday through Thursday (`0-4`). Successful runs are marked, so later runs on the same target date exit without repeating the announcement. The scripts retry transient calendar/TTS network failures themselves and can use a valid cached calendar feed up to 36 hours old. If online TTS remains unavailable, installed `espeak-ng` generates speech locally. Each notifier's output and errors are appended to its log; `-u` makes output appear promptly. If all attempts fail, the script exits with an error and the log must be checked (cron email is only delivered if the Pi has a local mail setup).
 
-The third line runs `/home/pi/update_home_notifiers.sh` at 16:00 every Sunday (`0`), before that day's homework announcement. `>/dev/null 2>&1` discards all output, including errors, so failures will be hard to diagnose; consider appending it to `/home/pi/home_notifiers/update.log` instead. Automatic updates are convenient, but make sure the update script only replaces the intended program files and never deletes or overwrites `notifier.env` or the logs. Automatically running new code from the repository without reviewing it is less safe than updating manually or pinning a reviewed revision.
+The last line runs the updater at 16:00 every Sunday (`0`), before that day's homework announcement. It stages all downloads before replacing the program files, and does not touch `notifier.env`, logs, the calendar cache, or success markers. Review automatic updates before enabling them if you prefer to pin a known revision.
 
 The notifier logs are `/home/pi/home_notifiers/notifier.log` and `/home/pi/home_notifiers/homework.log`.
 
 ### Troubleshooting
 
-- **Calendar retrieval:** verify the Pi has internet access and that `CALENDAR_ICAL_URL` is set correctly; the feed URL is intentionally omitted from error output.
-- **Audio generation:** confirm the Pi can reach the internet, as Google Text-to-Speech requires it, and that the listed packages are installed for `/usr/bin/python3`.
+- **Calendar retrieval:** the scripts retry transient failures and use a valid cached feed only while it is less than 36 hours old. If all attempts fail, verify internet access and `CALENDAR_ICAL_URL`; the private feed URL is intentionally omitted from error output.
+- **Audio generation:** online Google TTS is retried first. If it remains unavailable, install `espeak-ng` (`sudo apt install espeak-ng`) for offline speech; check the log for a final generation error.
 - **Chromecast playback:** confirm the speaker is powered on and on the same local network, `HOME_SPEAKER_NAME` matches its device name, and the Pi can reach it. Set `HOME_SPEAKER_IP` to its reserved local address if discovery fails.
+- **Retries exhausted:** inspect the appropriate log file. The retry cron runs should recover temporary outages, but persistent calendar, TTS, Pi, or speaker failures still require intervention; cron itself does not guarantee delivery.
 - Review the appropriate log file listed above for other errors. Use a dry run to isolate calendar retrieval and filtering from audio and speaker issues.
 
 ---

@@ -12,9 +12,13 @@ from http.server import HTTPServer, SimpleHTTPRequestHandler
 
 import pychromecast
 import recurring_ical_events
-import requests
-from gtts import gTTS
-from icalendar import Calendar
+
+from notifier_reliability import (
+    already_succeeded,
+    fetch_calendar as fetch_calendar_with_reliability,
+    generate_audio,
+    record_success,
+)
 
 # ------------------------------------------------------------
 # Configuration
@@ -43,24 +47,7 @@ TTS_FILE = os.path.join(
 # ------------------------------------------------------------
 
 def fetch_calendar():
-    try:
-        response = requests.get(
-            CALENDAR_ICAL_URL,
-            timeout=15
-        )
-        response.raise_for_status()
-    except requests.RequestException:
-        raise RuntimeError(
-            'Could not retrieve the calendar feed; check the network and '
-            'CALENDAR_ICAL_URL configuration.'
-        ) from None
-
-    try:
-        return Calendar.from_ical(response.content)
-    except ValueError:
-        raise RuntimeError(
-            'Could not parse the calendar feed; check that it is a valid iCal feed.'
-        ) from None
+    return fetch_calendar_with_reliability(CALENDAR_ICAL_URL)
 
 
 def parse_event_description(component):
@@ -131,10 +118,10 @@ def _format_homework(fields, due_label):
     return f'Homework for {subject}, "{clean_title}", due {due_label}'
 
 
-def fetch_tomorrows_homework():
+def fetch_tomorrows_homework(target_date=None):
     cal = fetch_calendar()
 
-    tomorrow = date.today() + timedelta(days=1)
+    tomorrow = target_date or date.today() + timedelta(days=1)
 
     events = recurring_ical_events.of(cal).at(tomorrow)
 
@@ -190,14 +177,7 @@ def build_message(lewis, austin):
 # ------------------------------------------------------------
 
 def generate_tts(message):
-    print('[tts] Generating audio...')
-
-    gTTS(
-        text=message,
-        lang='en'
-    ).save(TTS_FILE)
-
-    print(f'[tts] Saved to {TTS_FILE}')
+    return generate_audio(message, TTS_FILE)
 
 # ------------------------------------------------------------
 # Chromecast
@@ -238,10 +218,10 @@ def serve_file(filepath, port, duration=90):
     server.serve_forever()
 
 
-def cast():
+def cast(audio_path, content_type):
     local_ip = get_local_ip()
 
-    filename = os.path.basename(TTS_FILE)
+    filename = os.path.basename(audio_path)
 
     audio_url = (
         f'http://{local_ip}:{SERVE_PORT}/{filename}'
@@ -249,7 +229,7 @@ def cast():
 
     threading.Thread(
         target=serve_file,
-        args=(TTS_FILE, SERVE_PORT),
+        args=(audio_path, SERVE_PORT),
         daemon=True
     ).start()
 
@@ -298,7 +278,7 @@ def cast():
 
     mc.play_media(
         audio_url,
-        'audio/mp3'
+        content_type
     )
 
     playback_deadline = time.monotonic() + 30
@@ -335,11 +315,27 @@ def main():
         action='store_true',
         help='Fetch tomorrow’s homework and print the message without audio or casting.'
     )
+    parser.add_argument(
+        '--force',
+        action='store_true',
+        help='Announce even if tomorrow has already been announced successfully.'
+    )
     args = parser.parse_args()
+    target_date = date.today() + timedelta(days=1)
+
+    if not args.dry_run and not args.force and already_succeeded(
+        'homework',
+        target_date
+    ):
+        print(
+            f'[status] Homework announcement for {target_date} '
+            'already completed; skipping duplicate.'
+        )
+        return
 
     print('Checking homework for tomorrow...')
 
-    lewis, austin = fetch_tomorrows_homework()
+    lewis, austin = fetch_tomorrows_homework(target_date)
 
     message = build_message(lewis, austin)
 
@@ -349,9 +345,11 @@ def main():
         print('[dry-run] Skipping audio generation and cast.')
         return
 
-    generate_tts(message)
+    audio_path, content_type = generate_tts(message)
 
-    cast()
+    cast(audio_path, content_type)
+    record_success('homework', target_date)
+    print(f'[status] Success recorded for {target_date}.')
 
 
 if __name__ == '__main__':

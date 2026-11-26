@@ -1,3 +1,5 @@
+# Python dependencies. The offline TTS fallback, espeak-ng, is an OS package;
+# install it on Raspberry Pi OS with: sudo apt install espeak-ng
 requests
 recurring-ical-events
 icalendar
