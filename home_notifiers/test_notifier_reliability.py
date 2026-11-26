@@ -145,14 +145,14 @@ class NotifierReliabilityTests(unittest.TestCase):
         fake_gtts.__path__ = []
         fake_tts = types.ModuleType('gtts.tts')
         save_attempts = []
+        tts_calls = []
 
         class FakeGTTSError(Exception):
             pass
 
         class FakeGtts:
-            def __init__(self, text, lang):
-                self.text = text
-                self.lang = lang
+            def __init__(self, text, lang, tld):
+                tts_calls.append((text, lang, tld))
 
             def save(self, path):
                 save_attempts.append(path)
@@ -167,10 +167,15 @@ class NotifierReliabilityTests(unittest.TestCase):
             output_path = Path(directory) / 'announcement.mp3'
             with patch.dict(sys.modules, {'gtts': fake_gtts, 'gtts.tts': fake_tts}), \
                     patch.object(notifier_reliability.time, 'sleep'):
-                result = notifier_reliability.generate_audio('Hello', output_path)
+                result = notifier_reliability.generate_audio(
+                    'Hello',
+                    output_path,
+                    tld='com.au',
+                )
 
             self.assertEqual(result, (str(output_path), 'audio/mp3'))
             self.assertEqual(len(save_attempts), 3)
+            self.assertEqual(tts_calls, [('Hello', 'en', 'com.au')] * 3)
             self.assertEqual(output_path.read_bytes(), b'mp3 audio')
 
     def test_offline_tts_creates_wav_and_returns_cast_mime_type(self):

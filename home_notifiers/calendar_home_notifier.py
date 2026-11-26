@@ -46,6 +46,7 @@ HOMEWORK_KEYWORD = re.compile(r'homework', re.IGNORECASE)
 
 SERVE_PORT = 8090
 TTS_FILE = os.path.join(tempfile.gettempdir(), 'cal_announcement.mp3')
+TTS_TLD = 'ca'
 
 # ------------------------------------------------------------
 # Calendar
@@ -197,7 +198,7 @@ def build_message(titles):
 # ------------------------------------------------------------
 
 def generate_tts(message):
-    return generate_audio(message, TTS_FILE)
+    return generate_audio(message, TTS_FILE, tld=TTS_TLD)
 
 # ------------------------------------------------------------
 # Chromecast

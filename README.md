@@ -321,8 +321,8 @@ The independent scripts in [`home_notifiers/`](home_notifiers/) announce calenda
 
 ### Scripts
 
-- `calendar_home_notifier.py` announces today's events for Lewis or Austin. Ordinary events are selected by title; homework events (identified by “homework” in the title or by the structured homework fields) use the description's `Pupil`, `Subject`, and `Title` fields and are announced as due today. `--debug` prints all events found for today, and `--dry-run` prints the announcement without generating audio or using the speaker.
-- `homework_notifier.py` finds tomorrow's homework events (identified by “homework” in the event title or by the structured homework fields), identifies Lewis or Austin from the event description's `Pupil` field (or the title if that field is absent), and announces the description's subject and homework title as due tomorrow. Its `--dry-run` option prints the announcement without generating audio or using the speaker.
+- `calendar_home_notifier.py` announces today's events for Lewis or Austin. Ordinary events are selected by title; homework events (identified by “homework” in the title or by the structured homework fields) use the description's `Pupil`, `Subject`, and `Title` fields and are announced as due today. Online Google TTS uses Canadian English (`tld='ca'`). `--debug` prints all events found for today, and `--dry-run` prints the announcement without generating audio or using the speaker.
+- `homework_notifier.py` finds tomorrow's homework events (identified by “homework” in the event title or by the structured homework fields), identifies Lewis or Austin from the event description's `Pupil` field (or the title if that field is absent), and announces the description's subject and homework title as due tomorrow. Online Google TTS uses Australian English (`tld='com.au'`). Its `--dry-run` option prints the announcement without generating audio or using the speaker.
 
 Homework event descriptions are expected to contain fields like:
 

@@ -163,7 +163,7 @@ def _temporary_audio_path(destination):
     return Path(temporary_file.name)
 
 
-def _generate_online_audio(message, destination):
+def _generate_online_audio(message, destination, tld):
     from gtts import gTTS
     from gtts.tts import gTTSError
 
@@ -171,7 +171,7 @@ def _generate_online_audio(message, destination):
     for attempt in range(1, TTS_ATTEMPTS + 1):
         temporary_path = _temporary_audio_path(destination)
         try:
-            gTTS(text=message, lang='en').save(str(temporary_path))
+            gTTS(text=message, lang='en', tld=tld).save(str(temporary_path))
             if temporary_path.stat().st_size == 0:
                 raise RuntimeError('Google TTS returned an empty audio file')
             os.replace(temporary_path, destination)
@@ -235,7 +235,7 @@ def _generate_offline_audio(message, destination):
     return str(destination), 'audio/wav'
 
 
-def generate_audio(message, mp3_path):
+def generate_audio(message, mp3_path, tld='com'):
     """Generate speech online with retries, then fall back to local eSpeak."""
 
     mp3_path = Path(mp3_path)
@@ -248,7 +248,7 @@ def generate_audio(message, mp3_path):
         online_error = error
     else:
         try:
-            _generate_online_audio(message, mp3_path)
+            _generate_online_audio(message, mp3_path, tld)
         except (gTTSError, requests.RequestException) as error:
             online_error = error
         except ImportError as error:

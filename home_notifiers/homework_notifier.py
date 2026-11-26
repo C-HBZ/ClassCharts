@@ -36,6 +36,7 @@ HOMEWORK_KEYWORD = re.compile(r'homework', re.IGNORECASE)
 CHILD_NAME = re.compile(r'\b(lewis|austin)\b', re.IGNORECASE)
 
 SERVE_PORT = 8091
+TTS_TLD = 'com.au'
 
 TTS_FILE = os.path.join(
     tempfile.gettempdir(),
@@ -177,7 +178,7 @@ def build_message(lewis, austin):
 # ------------------------------------------------------------
 
 def generate_tts(message):
-    return generate_audio(message, TTS_FILE)
+    return generate_audio(message, TTS_FILE, tld=TTS_TLD)
 
 # ------------------------------------------------------------
 # Chromecast
