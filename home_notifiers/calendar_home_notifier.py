@@ -241,7 +241,7 @@ def _serve_file(filepath, port, duration=90):
             )
 
         def log_message(self, fmt, *args):
-            pass
+            print(f'[http] {fmt % args}', flush=True)
 
     server = HTTPServer(('', port), Handler)
 
@@ -313,18 +313,30 @@ def cast_to_speaker(message):
         f'Playing {audio_url}'
     )
 
+    print('[cast] Setting speaker volume to 50%.')
+    cast.set_volume(0.5)
+
     mc = cast.media_controller
 
     mc.play_media(audio_url, 'audio/mp3')
 
-    mc.block_until_active(timeout=15)
+    playback_deadline = time.monotonic() + 30
+    while not mc.status.player_is_playing:
+        if time.monotonic() >= playback_deadline:
+            raise RuntimeError(
+                'Chromecast did not start audio playback within 30 seconds '
+                f'(player state: {mc.status.player_state}). Check that the '
+                'speaker can access the Pi at the printed audio URL.'
+            )
+        time.sleep(0.25)
 
-    time.sleep(2)
+    print('[cast] Audio playback started.')
 
-    while cast.media_controller.status.player_is_playing:
-        time.sleep(1)
-
-    cast.quit_app()
+    try:
+        while mc.status.player_is_playing:
+            time.sleep(0.25)
+    finally:
+        cast.quit_app()
 
     print('[cast] Playback complete.')
 

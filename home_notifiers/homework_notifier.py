@@ -197,6 +197,8 @@ def generate_tts(message):
         lang='en'
     ).save(TTS_FILE)
 
+    print(f'[tts] Saved to {TTS_FILE}')
+
 # ------------------------------------------------------------
 # Chromecast
 # ------------------------------------------------------------
@@ -224,7 +226,7 @@ def serve_file(filepath, port, duration=90):
             )
 
         def log_message(self, fmt, *args):
-            pass
+            print(f'[http] {fmt % args}', flush=True)
 
     server = HTTPServer(('', port), Handler)
 
@@ -259,7 +261,13 @@ def cast():
     }
 
     if SPEAKER_IP:
+        print(
+            f'[cast] Connecting to {SPEAKER_NAME} '
+            f'at {SPEAKER_IP}...'
+        )
         kwargs['known_hosts'] = [SPEAKER_IP]
+    else:
+        print(f'[cast] Discovering "{SPEAKER_NAME}" on network...')
 
     chromecasts, browser = (
         pychromecast.get_listed_chromecasts(**kwargs)
@@ -280,19 +288,38 @@ def cast():
 
     mc = cast_device.media_controller
 
+    print(
+        f'[cast] Connected to {cast_device.name}. '
+        f'Playing {audio_url}'
+    )
+
+    print('[cast] Setting speaker volume to 50%.')
+    cast_device.set_volume(0.5)
+
     mc.play_media(
         audio_url,
         'audio/mp3'
     )
 
-    mc.block_until_active(timeout=15)
+    playback_deadline = time.monotonic() + 30
+    while not mc.status.player_is_playing:
+        if time.monotonic() >= playback_deadline:
+            raise RuntimeError(
+                'Chromecast did not start audio playback within 30 seconds '
+                f'(player state: {mc.status.player_state}). Check that the '
+                'speaker can access the Pi at the printed audio URL.'
+            )
+        time.sleep(0.25)
 
-    time.sleep(2)
+    print('[cast] Audio playback started.')
 
-    while cast_device.media_controller.status.player_is_playing:
-        time.sleep(1)
+    try:
+        while mc.status.player_is_playing:
+            time.sleep(0.25)
+    finally:
+        cast_device.quit_app()
 
-    cast_device.quit_app()
+    print('[cast] Playback complete.')
 
 
 # ------------------------------------------------------------
@@ -316,7 +343,7 @@ def main():
 
     message = build_message(lewis, austin)
 
-    print('Message:', message)
+    print(f'Message: {message}')
 
     if args.dry_run:
         print('[dry-run] Skipping audio generation and cast.')
