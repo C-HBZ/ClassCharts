@@ -365,11 +365,9 @@ Put these exports in `notifier.env`, replacing the calendar placeholder with you
 
 ```bash
 export CALENDAR_ICAL_URL='REPLACE_WITH_YOUR_PRIVATE_ICAL_FEED_URL'
-export HOME_SPEAKER_IP='192.168.1.xx'
-export HOME_SPEAKER_NAME='Lounge speaker'
 ```
 
-`CALENDAR_ICAL_URL` is required. `HOME_SPEAKER_NAME` defaults to `Lounge speaker` if omitted, and `HOME_SPEAKER_IP` is optional but can make Chromecast discovery more reliable. Treat the calendar feed URL like a password: do not print it, paste it into source code, or commit it. Restrict access to the config file:
+`CALENDAR_ICAL_URL` is required. Both scripts target the Google Home speaker group named `ALLnoOffice` via Cast discovery, so the individual speaker IP and name do not belong in `notifier.env`. Name-based discovery uses mDNS and works when the Pi and speaker group are visible on the same local network; it can be less reliable than a known IP if multicast discovery is blocked, but an individual speaker's IP cannot be used as the group address. Treat the calendar feed URL like a password: do not print it, paste it into source code, or commit it. Restrict access to the config file:
 
 ```bash
 chmod 700 /home/pi/home_notifiers
@@ -417,7 +415,7 @@ The notifier logs are `/home/pi/home_notifiers/notifier.log` and `/home/pi/home_
 
 - **Calendar retrieval:** the scripts retry transient failures and use a valid cached feed only while it is less than 36 hours old. If all attempts fail, verify internet access and `CALENDAR_ICAL_URL`; the private feed URL is intentionally omitted from error output.
 - **Audio generation:** online Google TTS is retried first. If it remains unavailable, install `espeak-ng` (`sudo apt install espeak-ng`) for offline speech; check the log for a final generation error.
-- **Chromecast playback:** confirm the speaker is powered on and on the same local network, `HOME_SPEAKER_NAME` matches its device name, and the Pi can reach it. Set `HOME_SPEAKER_IP` to its reserved local address if discovery fails.
+- **Chromecast playback:** confirm the `ALLnoOffice` group is available in Google Home, the Pi and group are on the same local network, and the router allows mDNS/multicast discovery. The scripts target the group by name; individual speaker IPs are not used.
 - **Retries exhausted:** inspect the appropriate log file. The retry cron runs should recover temporary outages, but persistent calendar, TTS, Pi, or speaker failures still require intervention; cron itself does not guarantee delivery.
 - Review the appropriate log file listed above for other errors. Use a dry run to isolate calendar retrieval and filtering from audio and speaker issues.
 

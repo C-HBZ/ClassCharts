@@ -29,8 +29,7 @@ CALENDAR_ICAL_URL = os.environ.get('CALENDAR_ICAL_URL')
 if not CALENDAR_ICAL_URL:
     raise RuntimeError('Missing environment variable: CALENDAR_ICAL_URL')
 
-SPEAKER_NAME = os.getenv('HOME_SPEAKER_NAME', 'Lounge speaker')
-SPEAKER_IP = os.getenv('HOME_SPEAKER_IP', '')
+SPEAKER_NAME = 'ALLnoOffice'
 
 HOMEWORK_KEYWORD = re.compile(r'homework', re.IGNORECASE)
 CHILD_NAME = re.compile(r'\b(lewis|austin)\b', re.IGNORECASE)
@@ -241,14 +240,7 @@ def cast(audio_path, content_type):
         'timeout': 15
     }
 
-    if SPEAKER_IP:
-        print(
-            f'[cast] Connecting to {SPEAKER_NAME} '
-            f'at {SPEAKER_IP}...'
-        )
-        kwargs['known_hosts'] = [SPEAKER_IP]
-    else:
-        print(f'[cast] Discovering "{SPEAKER_NAME}" on network...')
+    print(f'[cast] Discovering speaker group "{SPEAKER_NAME}" on network...')
 
     chromecasts, browser = (
         pychromecast.get_listed_chromecasts(**kwargs)
