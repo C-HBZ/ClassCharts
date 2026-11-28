@@ -1,10 +1,14 @@
 """Shared reliability helpers for the Raspberry Pi home notifiers."""
 
+import ipaddress
+import logging
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
+from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 
 import requests
@@ -15,6 +19,192 @@ CALENDAR_RETRY_DELAYS = (2, 5)
 CALENDAR_CACHE_MAX_AGE = 36 * 60 * 60
 TTS_ATTEMPTS = 3
 TTS_RETRY_DELAYS = (2, 5)
+LOG_RETENTION_DAYS = 5
+
+
+class _TimestampedFormatter(logging.Formatter):
+    def format(self, record):
+        formatted = super().format(record)
+        lines = formatted.splitlines()
+        if len(lines) < 2:
+            return formatted
+
+        prefix = f'{self.formatTime(record, self.datefmt)} {record.levelname} '
+        return '\n'.join([lines[0]] + [prefix + line for line in lines[1:]])
+
+
+class _LoggingStream:
+    def __init__(self, logger, level):
+        self.logger = logger
+        self.level = level
+        self.buffer = ''
+
+    def write(self, text):
+        text = str(text)
+        self.buffer += text
+        while '\n' in self.buffer:
+            line, self.buffer = self.buffer.split('\n', 1)
+            if line:
+                self.logger.log(self.level, line)
+        return len(text)
+
+    def flush(self):
+        if self.buffer:
+            self.logger.log(self.level, self.buffer)
+            self.buffer = ''
+
+    def isatty(self):
+        return False
+
+
+def _prune_log_archives(log_path, retention_days):
+    cutoff = time.time() - retention_days * 24 * 60 * 60
+    removed = 0
+    for archive_path in log_path.parent.glob(f'{log_path.name}.*'):
+        try:
+            if archive_path.is_file() and archive_path.stat().st_mtime < cutoff:
+                archive_path.unlink()
+                removed += 1
+        except OSError:
+            continue
+    return removed
+
+
+def run_with_logging(name, callback, log_path=None, retention_days=LOG_RETENTION_DAYS):
+    """Run a notifier with timestamped output and a short rotating log history."""
+
+    if retention_days < 1:
+        raise ValueError('retention_days must be at least 1')
+
+    log_path = Path(log_path or Path(__file__).with_name(f'{name}.log'))
+    logger = logging.getLogger(f'home_notifiers.{name}')
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+
+    for existing_handler in logger.handlers[:]:
+        logger.removeHandler(existing_handler)
+        existing_handler.close()
+
+    original_stdout = sys.stdout
+    original_stderr = sys.stderr
+    console_enabled = original_stdout.isatty()
+
+    file_handler = TimedRotatingFileHandler(
+        log_path,
+        when='midnight',
+        backupCount=retention_days - 1,
+        encoding='utf-8',
+    )
+    formatter = _TimestampedFormatter(
+        '%(asctime)s %(levelname)s %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S%z',
+    )
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+
+    if console_enabled:
+        console_handler = logging.StreamHandler(original_stdout)
+        console_handler.setFormatter(formatter)
+        logger.addHandler(console_handler)
+
+    sys.stdout = _LoggingStream(logger, logging.INFO)
+    sys.stderr = _LoggingStream(logger, logging.ERROR)
+
+    try:
+        logger.info(
+            'Run started (args=%r, cwd=%s).',
+            sys.argv[1:],
+            os.getcwd(),
+        )
+        removed_archives = _prune_log_archives(log_path, retention_days)
+        if removed_archives:
+            logger.info('Removed %d expired log archive(s).', removed_archives)
+        callback()
+        logger.info('Run completed successfully.')
+        return 0
+    except Exception:
+        logger.exception('Run failed.')
+        return 1
+    finally:
+        sys.stdout.flush()
+        sys.stderr.flush()
+        sys.stdout = original_stdout
+        sys.stderr = original_stderr
+        for handler in logger.handlers[:]:
+            handler.flush()
+            logger.removeHandler(handler)
+            handler.close()
+
+
+def parse_speaker_ips(value):
+    ips = []
+    for candidate in (value or '').split(','):
+        candidate = candidate.strip()
+        if not candidate:
+            continue
+        try:
+            ip = str(ipaddress.ip_address(candidate))
+        except ValueError:
+            raise RuntimeError(
+                f'Invalid speaker IP address {candidate!r}; set SPEAKER_IPS '
+                'to a comma-separated list of IP addresses.'
+            ) from None
+        if ip not in ips:
+            ips.append(ip)
+
+    if not ips:
+        raise RuntimeError(
+            'Missing environment variable: SPEAKER_IPS; set it to a '
+            'comma-separated list of Chromecast speaker IP addresses.'
+        )
+    return tuple(ips)
+
+
+def play_on_speakers(speaker_ips, play_speaker):
+    """Attempt playback on each configured speaker, continuing on failures."""
+
+    import pychromecast
+
+    print(f'[cast] Connecting to speakers at {", ".join(speaker_ips)}...')
+    chromecasts, browser = pychromecast.get_chromecasts(
+        known_hosts=list(speaker_ips),
+        tries=1,
+        retry_wait=1,
+        timeout=5,
+    )
+    chromecasts_by_ip = {
+        cast.cast_info.host: cast
+        for cast in chromecasts
+    }
+    successful_count = 0
+
+    try:
+        for speaker_ip in speaker_ips:
+            cast = chromecasts_by_ip.get(speaker_ip)
+            if cast is None:
+                print(f'[cast] No Chromecast responded at {speaker_ip}.')
+                continue
+
+            try:
+                play_speaker(cast, speaker_ip)
+            except Exception as error:
+                print(
+                    f'[cast] Playback failed at {speaker_ip} '
+                    f'({type(error).__name__}): {error}'
+                )
+                continue
+
+            successful_count += 1
+    finally:
+        pychromecast.discovery.stop_discovery(browser)
+
+    if not successful_count:
+        raise RuntimeError(
+            'Could not announce on any configured Chromecast speaker.'
+        )
+
+    print(f'[cast] Announcement completed on {successful_count} speaker(s).')
+    return successful_count
 
 
 def _calendar_cache_path():

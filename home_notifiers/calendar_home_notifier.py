@@ -25,7 +25,10 @@ from notifier_reliability import (
     already_succeeded,
     fetch_calendar,
     generate_audio,
+    parse_speaker_ips,
+    play_on_speakers,
     record_success,
+    run_with_logging,
 )
 
 # ------------------------------------------------------------
@@ -34,10 +37,7 @@ from notifier_reliability import (
 
 CALENDAR_ICAL_URL = os.environ.get('CALENDAR_ICAL_URL')
 
-if not CALENDAR_ICAL_URL:
-    raise RuntimeError('Missing environment variable: CALENDAR_ICAL_URL')
-
-SPEAKER_NAME = 'ALLnoOffice'
+SPEAKER_IPS = os.environ.get('SPEAKER_IPS')
 
 KEYWORDS = re.compile(r'lewis|austin', re.IGNORECASE)
 CHILD_NAME = re.compile(r'\b(lewis|austin)\b', re.IGNORECASE)
@@ -52,6 +52,8 @@ TTS_TLD = 'ca'
 # ------------------------------------------------------------
 
 def _fetch_calendar():
+    if not CALENDAR_ICAL_URL:
+        raise RuntimeError('Missing environment variable: CALENDAR_ICAL_URL')
     return fetch_calendar(CALENDAR_ICAL_URL)
 
 
@@ -214,7 +216,7 @@ def get_local_ip():
         s.close()
 
 
-def _serve_file(filepath, port, duration=90):
+def _start_file_server(filepath, port):
     directory = os.path.dirname(filepath)
 
     class Handler(SimpleHTTPRequestHandler):
@@ -229,16 +231,12 @@ def _serve_file(filepath, port, duration=90):
             print(f'[http] {fmt % args}', flush=True)
 
     server = HTTPServer(('', port), Handler)
-
-    t = threading.Timer(duration, server.shutdown)
-    t.start()
-
-    server.serve_forever()
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
 
 
 def cast_to_speaker(audio_path, content_type):
-    import pychromecast
-
+    speaker_ips = parse_speaker_ips(SPEAKER_IPS)
     local_ip = get_local_ip()
 
     filename = os.path.basename(audio_path)
@@ -247,72 +245,47 @@ def cast_to_speaker(audio_path, content_type):
         f'http://{local_ip}:{SERVE_PORT}/{filename}'
     )
 
-    thread = threading.Thread(
-        target=_serve_file,
-        args=(audio_path, SERVE_PORT),
-        daemon=True,
-    )
-
-    thread.start()
-
+    server = _start_file_server(audio_path, SERVE_PORT)
     time.sleep(0.5)
 
-    kwargs = {
-        'friendly_names': [SPEAKER_NAME],
-        'timeout': 15
-    }
-
-    print(f'[cast] Discovering speaker group "{SPEAKER_NAME}" on network...')
-
-    chromecasts, browser = (
-        pychromecast.get_listed_chromecasts(**kwargs)
-    )
-
-    if not chromecasts:
-        pychromecast.discovery.stop_discovery(browser)
-
-        raise RuntimeError(
-            f'Could not find "{SPEAKER_NAME}". '
-            'Check the speaker is powered on and accessible.'
-        )
-
-    cast = chromecasts[0]
-
-    cast.wait()
-
-    pychromecast.discovery.stop_discovery(browser)
-
-    print(
-        f'[cast] Connected to {cast.name}. '
-        f'Playing {audio_url}'
-    )
-
-    print('[cast] Setting speaker volume to 50%.')
-    cast.set_volume(0.5)
-
-    mc = cast.media_controller
-
-    mc.play_media(audio_url, content_type)
-
-    playback_deadline = time.monotonic() + 30
-    while not mc.status.player_is_playing:
-        if time.monotonic() >= playback_deadline:
-            raise RuntimeError(
-                'Chromecast did not start audio playback within 30 seconds '
-                f'(player state: {mc.status.player_state}). Check that the '
-                'speaker can access the Pi at the printed audio URL.'
-            )
-        time.sleep(0.25)
-
-    print('[cast] Audio playback started.')
-
     try:
-        while mc.status.player_is_playing:
-            time.sleep(0.25)
-    finally:
-        cast.quit_app()
+        def play_speaker(cast, speaker_ip):
+            cast.wait()
+            print(
+                f'[cast] Connected to speaker at {speaker_ip}. '
+                f'Playing {audio_url}'
+            )
+            print('[cast] Setting speaker volume to 50%.')
+            cast.set_volume(0.5)
 
-    print('[cast] Playback complete.')
+            mc = cast.media_controller
+            mc.play_media(audio_url, content_type)
+
+            playback_deadline = time.monotonic() + 30
+            while not mc.status.player_is_playing:
+                if time.monotonic() >= playback_deadline:
+                    raise RuntimeError(
+                        'Chromecast did not start audio playback within '
+                        '30 seconds '
+                        f'(player state: {mc.status.player_state}). Check '
+                        'that the speaker can access the Pi at the printed '
+                        'audio URL.'
+                    )
+                time.sleep(0.25)
+
+            print('[cast] Audio playback started.')
+            try:
+                while mc.status.player_is_playing:
+                    time.sleep(0.25)
+            finally:
+                cast.quit_app()
+
+            print(f'[cast] Playback complete at {speaker_ip}.')
+
+        play_on_speakers(speaker_ips, play_speaker)
+    finally:
+        server.shutdown()
+        server.server_close()
 
 # ------------------------------------------------------------
 # Main
@@ -340,11 +313,16 @@ def main():
         action='store_true',
         help='Announce even if today has already been announced successfully.'
     )
+    parser.add_argument(
+        '--test-playback',
+        action='store_true',
+        help='Play on speakers without recording a successful scheduled run.'
+    )
 
     args = parser.parse_args()
     scheduled_date = date.today()
 
-    if not args.dry_run and not args.force and already_succeeded(
+    if not args.dry_run and not args.force and not args.test_playback and already_succeeded(
         'calendar',
         scheduled_date
     ):
@@ -372,9 +350,12 @@ def main():
     audio_path, content_type = generate_tts(message)
 
     cast_to_speaker(audio_path, content_type)
-    record_success('calendar', scheduled_date)
-    print(f'[status] Success recorded for {scheduled_date}.')
+    if args.test_playback:
+        print('[test-playback] Success marker not recorded.')
+    else:
+        record_success('calendar', scheduled_date)
+        print(f'[status] Success recorded for {scheduled_date}.')
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(run_with_logging('notifier', main))

@@ -337,7 +337,7 @@ The spoken homework format is `Lewis. Homework for History, "Chapter 4", due tod
 
 ### Raspberry Pi installation and configuration
 
-Copy both notifier scripts and their shared helper into `/home/pi/home_notifiers/`, and install the updater outside that directory so it can safely update the notifier files. Then install the dependencies with the Pi's system Python:
+Copy both notifier scripts and their shared helper into `/home/pi/home_notifiers/`, and install the updater at `/home/pi/update_home_notifiers.sh` so it can safely update the notifier files. The updater creates `/home/pi/home_notifiers/` if it is missing, stages all downloads there, and updates its own installed copy after the notifier files. No separate cron job is needed to move or install the updated updater. Then install the dependencies with the Pi's system Python:
 
 ```bash
 mkdir -p /home/pi/home_notifiers
@@ -361,13 +361,14 @@ mkdir -p /home/pi/home_notifiers
 nano /home/pi/home_notifiers/notifier.env
 ```
 
-Put these exports in `notifier.env`, replacing the calendar placeholder with your private iCal feed URL:
+Put these exports in `notifier.env`, replacing the calendar placeholder with your private iCal feed URL and the speaker placeholders with reserved IP addresses:
 
 ```bash
 export CALENDAR_ICAL_URL='REPLACE_WITH_YOUR_PRIVATE_ICAL_FEED_URL'
+export SPEAKER_IPS='192.168.1.21,192.168.1.22'
 ```
 
-`CALENDAR_ICAL_URL` is required. Both scripts target the Google Home speaker group named `ALLnoOffice` via Cast discovery, so the individual speaker IP and name do not belong in `notifier.env`. Name-based discovery uses mDNS and works when the Pi and speaker group are visible on the same local network; it can be less reliable than a known IP if multicast discovery is blocked, but an individual speaker's IP cannot be used as the group address. Treat the calendar feed URL like a password: do not print it, paste it into source code, or commit it. Restrict access to the config file:
+`CALENDAR_ICAL_URL` and `SPEAKER_IPS` are required for announcements. `SPEAKER_IPS` is a comma-separated list; both scripts try every address in order, skipping unavailable speakers and reporting failure only if none can play. Playback on individual devices is sequential and will not be synchronized like a Home speaker group. Reserve each speaker's address in the router's DHCP settings so it does not change. Treat the calendar feed URL like a password: do not print it, paste it into source code, or commit it. Restrict access to the config file:
 
 ```bash
 chmod 700 /home/pi/home_notifiers
@@ -391,6 +392,15 @@ cd /home/pi
 Each dry run retrieves the calendar and prints the proposed announcement, but does not generate audio or connect to Chromecast. To announce immediately, run the corresponding script without `--dry-run`.
 After a successful announcement, the script records a per-date marker under `/home/pi/.local/state/home_notifiers/` so later scheduled retries do not repeat it. Use `--force` to deliberately announce again.
 
+To test actual audio and speaker playback without marking today's scheduled announcement complete, run each script with `--test-playback`:
+
+```bash
+/usr/bin/python3 /home/pi/home_notifiers/calendar_home_notifier.py --test-playback
+/usr/bin/python3 /home/pi/home_notifiers/homework_notifier.py --test-playback
+```
+
+This mode intentionally does not write a success marker, so later cron runs still execute normally. It does play the announcement on every configured speaker.
+
 ### Raspberry Pi cron schedule and logs
 
 Add these lines to the Pi user's crontab with `crontab -e`. These jobs run on the Pi, not in Codespaces:
@@ -407,15 +417,15 @@ Add these lines to the Pi user's crontab with `crontab -e`. These jobs run on th
 
 Cron's first five fields are minute, hour, day of month, month, and day of week. The three calendar runs give temporary failures another chance at 07:25 and 07:35; the homework runs retry at 17:05 and 17:15 Sunday through Thursday (`0-4`). Successful runs are marked, so later runs on the same target date exit without repeating the announcement. The scripts retry transient calendar/TTS network failures themselves and can use a valid cached calendar feed up to 36 hours old. If online TTS remains unavailable, installed `espeak-ng` generates speech locally. Each notifier's output and errors are appended to its log; `-u` makes output appear promptly. If all attempts fail, the script exits with an error and the log must be checked (cron email is only delivered if the Pi has a local mail setup).
 
-The last line runs the updater at 16:00 every Sunday (`0`), before that day's homework announcement. It stages all downloads before replacing the program files, and does not touch `notifier.env`, logs, the calendar cache, or success markers. Review automatic updates before enabling them if you prefer to pin a known revision.
+The last line runs the updater at 16:00 every Sunday (`0`), before that day's homework announcement. It stages all five downloads before replacing the notifier files and then the updater itself; it does not touch `notifier.env`, logs, the calendar cache, or success markers. The updater must initially be installed at `/home/pi/update_home_notifiers.sh` as shown above; each successful run then updates that same file automatically. Review automatic updates before enabling them if you prefer to pin a known revision.
 
-The notifier logs are `/home/pi/home_notifiers/notifier.log` and `/home/pi/home_notifiers/homework.log`.
+The notifier logs are `/home/pi/home_notifiers/notifier.log` and `/home/pi/home_notifiers/homework.log`. Each script writes timestamped output, startup/completion status, and full error tracebacks to its own log. Logs rotate daily and retain five calendar days; expired archives are also removed the next time that notifier runs. The cron redirection preserves errors that happen before Python starts, such as a missing `notifier.env`. If a scheduled time has no `Run started` entry, check whether cron launched the command in the Pi's cron/system logs; a script cannot log a run that never starts.
 
 ### Troubleshooting
 
 - **Calendar retrieval:** the scripts retry transient failures and use a valid cached feed only while it is less than 36 hours old. If all attempts fail, verify internet access and `CALENDAR_ICAL_URL`; the private feed URL is intentionally omitted from error output.
 - **Audio generation:** online Google TTS is retried first. If it remains unavailable, install `espeak-ng` (`sudo apt install espeak-ng`) for offline speech; check the log for a final generation error.
-- **Chromecast playback:** confirm the `ALLnoOffice` group is available in Google Home, the Pi and group are on the same local network, and the router allows mDNS/multicast discovery. The scripts target the group by name; individual speaker IPs are not used.
+- **Chromecast playback:** confirm each configured `SPEAKER_IPS` address belongs to a powered-on speaker on the same local network as the Pi. Reserve the addresses in the router; the scripts connect directly by IP and do not depend on Google Home group discovery or mDNS.
 - **Retries exhausted:** inspect the appropriate log file. The retry cron runs should recover temporary outages, but persistent calendar, TTS, Pi, or speaker failures still require intervention; cron itself does not guarantee delivery.
 - Review the appropriate log file listed above for other errors. Use a dry run to isolate calendar retrieval and filtering from audio and speaker issues.
 

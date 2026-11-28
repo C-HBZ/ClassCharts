@@ -11,6 +11,8 @@ from unittest.mock import patch
 
 import requests
 
+import calendar_home_notifier
+import homework_notifier
 import notifier_reliability
 
 
@@ -221,6 +223,110 @@ class NotifierReliabilityTests(unittest.TestCase):
                         date(2026, 11, 28),
                     )
                 )
+
+    def test_notifier_logging_timestamps_output_and_prunes_expired_archives(self):
+        with tempfile.TemporaryDirectory() as directory:
+            log_path = Path(directory) / 'homework.log'
+            expired_archive = Path(f'{log_path}.old')
+            expired_archive.write_text('old log')
+            old_time = notifier_reliability.time.time() - 6 * 24 * 60 * 60
+            os.utime(expired_archive, (old_time, old_time))
+
+            def failing_run():
+                print('Checking homework...')
+                raise RuntimeError('speaker unavailable')
+
+            with patch.object(sys, 'stdout', io.StringIO()), \
+                    patch.object(sys, 'stderr', io.StringIO()):
+                result = notifier_reliability.run_with_logging(
+                    'logging_test',
+                    failing_run,
+                    log_path=log_path,
+                    retention_days=5,
+                )
+
+            log_lines = log_path.read_text().splitlines()
+            self.assertEqual(result, 1)
+            self.assertFalse(expired_archive.exists())
+            self.assertTrue(any('Checking homework...' in line for line in log_lines))
+            self.assertTrue(any('RuntimeError: speaker unavailable' in line for line in log_lines))
+            for line in log_lines:
+                self.assertRegex(
+                    line,
+                    r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}[+-]\d{4} (INFO|ERROR) ',
+                )
+
+    def test_speaker_ips_deduplicate_and_playback_continues_after_device_failure(self):
+        speaker_ips = notifier_reliability.parse_speaker_ips(
+            ' 192.168.1.21, 192.168.1.22, 192.168.1.23,192.168.1.21 '
+        )
+        first_cast = types.SimpleNamespace(
+            cast_info=types.SimpleNamespace(host='192.168.1.21')
+        )
+        second_cast = types.SimpleNamespace(
+            cast_info=types.SimpleNamespace(host='192.168.1.22')
+        )
+        browser = object()
+        announced_ips = []
+        output = io.StringIO()
+
+        def announce(cast, speaker_ip):
+            announced_ips.append(speaker_ip)
+            if speaker_ip == '192.168.1.21':
+                raise OSError('speaker unavailable')
+
+        with patch(
+            'pychromecast.get_chromecasts',
+            return_value=([first_cast, second_cast], browser),
+        ) as get_chromecasts, patch(
+            'pychromecast.discovery.stop_discovery'
+        ) as stop_discovery, contextlib.redirect_stdout(output):
+            result = notifier_reliability.play_on_speakers(
+                speaker_ips,
+                announce,
+            )
+
+        self.assertEqual(
+            speaker_ips,
+            ('192.168.1.21', '192.168.1.22', '192.168.1.23'),
+        )
+        self.assertEqual(result, 1)
+        self.assertEqual(announced_ips, ['192.168.1.21', '192.168.1.22'])
+        get_chromecasts.assert_called_once_with(
+            known_hosts=['192.168.1.21', '192.168.1.22', '192.168.1.23'],
+            tries=1,
+            retry_wait=1,
+            timeout=5,
+        )
+        stop_discovery.assert_called_once_with(browser)
+        self.assertIn('No Chromecast responded', output.getvalue())
+        self.assertIn('Playback failed at 192.168.1.21', output.getvalue())
+
+    def test_calendar_test_playback_does_not_record_success_marker(self):
+        with patch.object(sys, 'argv', ['calendar_home_notifier.py', '--test-playback']), \
+                patch.object(calendar_home_notifier, 'already_succeeded', return_value=True) as already_succeeded, \
+                patch.object(calendar_home_notifier, 'fetch_todays_matching_titles', return_value=[]), \
+                patch.object(calendar_home_notifier, 'generate_tts', return_value=('audio.mp3', 'audio/mp3')), \
+                patch.object(calendar_home_notifier, 'cast_to_speaker') as cast, \
+                patch.object(calendar_home_notifier, 'record_success') as record_success:
+            calendar_home_notifier.main()
+
+        already_succeeded.assert_not_called()
+        cast.assert_called_once_with('audio.mp3', 'audio/mp3')
+        record_success.assert_not_called()
+
+    def test_homework_test_playback_does_not_record_success_marker(self):
+        with patch.object(sys, 'argv', ['homework_notifier.py', '--test-playback']), \
+                patch.object(homework_notifier, 'already_succeeded', return_value=True) as already_succeeded, \
+                patch.object(homework_notifier, 'fetch_tomorrows_homework', return_value=([], [])), \
+                patch.object(homework_notifier, 'generate_tts', return_value=('audio.mp3', 'audio/mp3')), \
+                patch.object(homework_notifier, 'cast') as cast, \
+                patch.object(homework_notifier, 'record_success') as record_success:
+            homework_notifier.main()
+
+        already_succeeded.assert_not_called()
+        cast.assert_called_once_with('audio.mp3', 'audio/mp3')
+        record_success.assert_not_called()
 
 
 if __name__ == '__main__':
